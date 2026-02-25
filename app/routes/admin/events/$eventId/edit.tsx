@@ -5,6 +5,7 @@ import { useLoaderData, useFetcher, type LoaderFunctionArgs, type ActionFunction
 import { db } from "~/lib/db.server";
 import { EventForm } from "~/components/eventform";
 import { getFlashSession, commitSession } from "~/lib/session.server";
+import { getSessionWithPermission } from "~/lib/auth.server";
 import { uploadImages } from "~/lib/upload.server";
 import type { Participant } from "~/components/participantManager";
 import * as z from 'zod';
@@ -16,7 +17,8 @@ import { sendAlimtalk, AlimtalkType } from '~/lib/alimtalk.server'; // 알림톡
 const STAMPS_PER_CARD = 10;
 
 // loader: URL의 eventId를 사용해 수정할 이벤트의 데이터를 불러옵니다.
-export const loader = async ({ params }: LoaderFunctionArgs) => {
+export const loader = async ({ request, params }: LoaderFunctionArgs) => {
+    await getSessionWithPermission(request, "ADMIN");
     const eventId = params.eventId;
     if (!eventId) {
         throw new Response("Event not found", { status: 404 });
@@ -121,6 +123,7 @@ const eventFormSchema = z.object({
 
 // action: 폼 제출 시, 데이터를 받아 이벤트를 '수정'합니다.
 export const action = async ({ request, params }: ActionFunctionArgs) => {
+    await getSessionWithPermission(request, "ADMIN");
     const eventId = params.eventId!;
     if (!eventId) {
         // 🚨 new Response 사용
@@ -208,7 +211,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
             // 새로 추가된 이미지들 생성
             if (newImageUrls.length > 0) {
                 await prisma.eventImage.createMany({
-                    data: newImageUrls.map(url => ({ url, eventId })),
+                    data: newImageUrls.map((image) => ({ url: image.url, eventId })),
                 });
             }
 

@@ -1,20 +1,17 @@
-// app/components/ParticipantManager.tsx (검색 버튼 방식 최종본)
+import { useEffect, useState } from 'react';
+import { useFetcher } from 'react-router';
+import { Search, Ticket, UserPlus, X } from 'lucide-react';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+import { toast } from 'sonner';
 
-import { useEffect, useState } from "react";
-import { useFetcher } from "react-router";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "~/components/ui/command";
-import { Input } from "~/components/ui/input";
-import { Button } from "~/components/ui/button";
-import { Badge } from "~/components/ui/badge";
-import { X, UserPlus, Ticket, Search, CalendarIcon } from "lucide-react"; 
-import { toast } from "sonner";
-import { Label } from "~/components/ui/label";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { Switch } from "./ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
-import { DatePicker } from "@mui/x-date-pickers";
-import type dayjs from "dayjs";
-
+import { Badge } from '~/components/ui/badge';
+import { Button } from '~/components/ui/button';
+import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from '~/components/ui/command';
+import { Input } from '~/components/ui/input';
+import { Label } from '~/components/ui/label';
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Switch } from './ui/switch';
 
 export type Participant = {
   type: 'user' | 'temp-phone' | 'temp-code';
@@ -23,185 +20,227 @@ export type Participant = {
   detail: string;
   maxUses?: number | null;
   expiryOption?: 'event_end' | 'one_day' | 'three_days' | 'custom';
-  customExpiryDate?: string | null; // ISO string으로 저장
+  customExpiryDate?: string | null;
 };
 
 type User = {
-    id: string;
-    name: string;
-    phoneNumber: string;
-}
+  id: string;
+  name: string;
+  phoneNumber: string;
+};
 
-export function ParticipantManager({ participants, setParticipants }: {
-    participants: Participant[];
-    setParticipants: (participants: Participant[]) => void;
+export function ParticipantManager({
+  participants,
+  setParticipants,
+}: {
+  participants: Participant[];
+  setParticipants: (participants: Participant[]) => void;
 }) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [expiryOption, setExpiryOption] = useState<Participant['expiryOption']>("one_day"); 
-   const [customExpiryDate, setCustomExpiryDate] = useState<Date | null>(new Date()); 
-  const [tempCodeMaxUses, setTempCodeMaxUses] = useState<number | null>(1); 
-  const [isUnlimited, setIsUnlimited] = useState(false); 
+  const [searchQuery, setSearchQuery] = useState('');
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [pendingTempPhone, setPendingTempPhone] = useState<{ phone: string; name: string } | null>(null);
+
+  const [expiryOption, setExpiryOption] = useState<Participant['expiryOption']>('one_day');
+  const [customExpiryDate, setCustomExpiryDate] = useState<Date | null>(new Date());
+  const [tempCodeMaxUses, setTempCodeMaxUses] = useState<number | null>(1);
+  const [isUnlimited, setIsUnlimited] = useState(false);
 
   const searchFetcher = useFetcher<{ users: User[] }>();
-  const phoneCheckFetcher = useFetcher<{ exists: boolean, isUser: boolean }>();
-
-  const handleSearch = () => {
-    if (searchQuery.length > 1) {
-      searchFetcher.load(`/api/users/search?q=${searchQuery}`);
-    } else {
-        toast.info("검색어는 2글자 이상 입력해주세요.");
-    }
-  };
+  const phoneCheckFetcher = useFetcher<{ exists: boolean; isUser: boolean }>();
 
   const addParticipant = (participant: Participant) => {
-    if (!participants.some(p => p.id === participant.id)) {
-      setParticipants([...participants, participant]);
-    } else {
-      toast.warning("이미 추가된 참가자입니다.");
-    }
-    setSearchQuery("");
-  };
-  
-  const removeParticipant = (id: string) => {
-    setParticipants(participants.filter(p => p.id !== id));
-  };
-
-  // '전화번호로 추가' 버튼 로직 수정
-  const addTempUserByPhone = () => {
-    const cleanPhone = phone.trim().replace(/-/g, "");
-    if (!cleanPhone.match(/^\d{10,11}$/)) {
-      toast.error("올바른 전화번호 형식을 입력해주세요.");
+    if (participants.some((existing) => existing.type === participant.type && existing.id === participant.id)) {
+      toast.warning('이미 추가된 참가자입니다.');
       return;
     }
-    if (participants.some(p => p.id === cleanPhone)) {
-        toast.warning("이미 추가된 참가자입니다.");
-        return;
+
+    setParticipants([...participants, participant]);
+    setSearchQuery('');
+  };
+
+  const removeParticipant = (type: Participant['type'], id: string) => {
+    setParticipants(participants.filter((participant) => !(participant.type === type && participant.id === id)));
+  };
+
+  const handleSearch = () => {
+    const query = searchQuery.trim();
+    if (query.length < 2) {
+      toast.info('검색어를 2글자 이상 입력해주세요.');
+      return;
     }
-    
+
+    searchFetcher.load(`/api/users/search?q=${encodeURIComponent(query)}`);
+  };
+
+  const addTempUserByPhone = () => {
+    const cleanPhone = phone.trim().replace(/-/g, '');
+    const cleanName = name.trim();
+
+    if (!/^\d{10,11}$/.test(cleanPhone)) {
+      toast.error('올바른 전화번호 형식을 입력해주세요.');
+      return;
+    }
+
+    if (participants.some((participant) => participant.type === 'temp-phone' && participant.id === cleanPhone)) {
+      toast.warning('이미 추가된 참가자입니다.');
+      return;
+    }
+
+    setPendingTempPhone({ phone: cleanPhone, name: cleanName });
     phoneCheckFetcher.load(`/api/users/check?phone=${cleanPhone}`);
   };
 
- 
   useEffect(() => {
-    // data가 없거나, fetcher가 idle 상태가 아니면 아무것도 하지 않음
-    if (phoneCheckFetcher.state !== 'idle' || !phoneCheckFetcher.data) {
-        return;
+    if (phoneCheckFetcher.state !== 'idle' || !phoneCheckFetcher.data || !pendingTempPhone) {
+      return;
     }
-    
+
     if (phoneCheckFetcher.data.exists) {
-        toast.error("이미 등록된 회원입니다. 상단의 회원 검색을 이용해주세요.");
-         
-        setPhone("");
+      toast.error('이미 등록된 회원입니다. 상단의 회원 검색을 이용해주세요.');
     } else {
-        const cleanPhone = phone.trim().replace(/-/g, "");
-        const success = addParticipant({
-            type: 'temp-phone',
-            id: cleanPhone,
-            name: name || `임시회원-${cleanPhone.slice(-4)}`,
-            detail: cleanPhone,
-        });
-        // 추가에 성공했을 때만 입력창을 비웁니다.
-        
-            setName("");
-            setPhone("");
-        
+      addParticipant({
+        type: 'temp-phone',
+        id: pendingTempPhone.phone,
+        name: pendingTempPhone.name || `임시회원-${pendingTempPhone.phone.slice(-4)}`,
+        detail: pendingTempPhone.phone,
+      });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phoneCheckFetcher.data, phoneCheckFetcher.state]); 
+
+    setName('');
+    setPhone('');
+    setPendingTempPhone(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phoneCheckFetcher.data, phoneCheckFetcher.state, pendingTempPhone]);
 
   const addTempUserByCode = () => {
-      const code = `CODE-${Date.now().toString(36).toUpperCase()}`;
-      addParticipant({
-          type: 'temp-code',
-          id: code,
-          name: '임시 코드 발급',
-          detail: `최대 ${isUnlimited ? '무제한' : `${tempCodeMaxUses}회`} 사용`, 
-          maxUses: isUnlimited ? null : tempCodeMaxUses, 
-          expiryOption: expiryOption,
-          customExpiryDate: expiryOption === 'custom' && customExpiryDate ? customExpiryDate.toISOString() : null,
-      });
-  }
- useEffect(() => {
+    if (expiryOption === 'custom' && !customExpiryDate) {
+      toast.error('직접 지정 만료일을 선택해주세요.');
+      return;
+    }
+
+    const code = `CODE-${Date.now().toString(36).toUpperCase()}`;
+
+    addParticipant({
+      type: 'temp-code',
+      id: code,
+      name: '임시 코드 발급',
+      detail: `최대 ${isUnlimited ? '무제한' : `${tempCodeMaxUses}회`} 사용`,
+      maxUses: isUnlimited ? null : tempCodeMaxUses,
+      expiryOption,
+      customExpiryDate: expiryOption === 'custom' && customExpiryDate ? customExpiryDate.toISOString() : null,
+    });
+  };
+
+  useEffect(() => {
     if (isUnlimited) {
       setTempCodeMaxUses(null);
-    } else if (tempCodeMaxUses === null) {
-      setTempCodeMaxUses(1); // 무제한 해제 시 기본 1회로 설정
+      return;
     }
-  }, [isUnlimited])
+
+    if (tempCodeMaxUses === null) {
+      setTempCodeMaxUses(1);
+    }
+  }, [isUnlimited, tempCodeMaxUses]);
+
   return (
     <div className="space-y-4">
-      {/* 참가자 목록 UI */}
       <div className="p-4 border rounded-lg space-y-2 min-h-[80px]">
-        {participants.map(p => (
-          <Badge key={p.id} variant="secondary" className="mr-2 mb-2 text-xs">
-            {p.name}({p.detail})
-            <button onClick={() => removeParticipant(p.id)} className="ml-2 rounded-full hover:bg-muted p-0.5">
+        {participants.map((participant) => (
+          <Badge key={`${participant.type}-${participant.id}`} variant="secondary" className="mr-2 mb-2 text-xs">
+            {participant.name} ({participant.detail})
+            <button
+              type="button"
+              onClick={() => removeParticipant(participant.type, participant.id)}
+              className="ml-2 rounded-full hover:bg-muted p-0.5"
+            >
               <X className="h-3 w-3" />
             </button>
           </Badge>
         ))}
-        {participants.length === 0 && <p className="text-sm text-muted-foreground">아래에서 참가자를 추가해주세요.</p>}
+        {participants.length === 0 && (
+          <p className="text-sm text-muted-foreground">아래에서 참가자를 추가해주세요.</p>
+        )}
       </div>
 
-      {/* --- 회원 검색 UI 수정 --- */}
       <div className="space-y-2">
-          <Label>회원 검색</Label>
-          <div className="flex gap-2">
-            <Input 
-                placeholder="이름 또는 전화번호로 검색"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSearch(); }}}
-            />
-            <Button type="button" onClick={handleSearch}>
-                <Search className="h-4 w-4"/>
-            </Button>
-          </div>
-          {/* 검색 결과는 CommandList를 활용하여 보여줌 */}
-          {searchFetcher.state !== 'idle' || searchFetcher.data ? (
-             <Command className="rounded-lg border shadow-md mt-2">
-                <CommandList>
-                <CommandEmpty>검색 결과가 없습니다.</CommandEmpty>
-                {searchFetcher.state === 'loading' && <div className="p-4 text-sm">검색 중...</div>}
-                {searchFetcher.data?.users && (
-                    <CommandGroup className="text-xs" heading="검색된 회원">
-                    {searchFetcher.data.users.map(user => (
-                        <CommandItem key={user.id} onSelect={() => addParticipant({
-                            type: 'user',
-                            id: user.id,
-                            name: user.name,
-                            detail: user.phoneNumber,
-                        })}>
-                        {user.name} ({user.phoneNumber})
-                        </CommandItem>
-                    ))}
-                    </CommandGroup>
-                )}
-                </CommandList>
-            </Command>
-          ) : null}
-      </div>
-      {/* --- UI 수정 끝 --- */}
+        <Label>회원 검색</Label>
+        <div className="flex gap-2">
+          <Input
+            placeholder="이름 또는 전화번호로 검색"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                handleSearch();
+              }
+            }}
+          />
+          <Button type="button" onClick={handleSearch}>
+            <Search className="h-4 w-4" />
+          </Button>
+        </div>
 
-      {/* 비회원 등록 UI */}
+        {searchFetcher.state !== 'idle' || searchFetcher.data ? (
+          <Command className="rounded-lg border shadow-md mt-2">
+            <CommandList>
+              <CommandEmpty>검색 결과가 없습니다.</CommandEmpty>
+              {searchFetcher.state === 'loading' && <div className="p-4 text-sm">검색 중...</div>}
+              {searchFetcher.data?.users && (
+                <CommandGroup className="text-xs" heading="검색된 회원">
+                  {searchFetcher.data.users.map((user) => (
+                    <CommandItem
+                      key={user.id}
+                      onSelect={() =>
+                        addParticipant({
+                          type: 'user',
+                          id: user.id,
+                          name: user.name,
+                          detail: user.phoneNumber,
+                        })
+                      }
+                    >
+                      {user.name} ({user.phoneNumber})
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              )}
+            </CommandList>
+          </Command>
+        ) : null}
+      </div>
+
       <div className="space-y-2">
         <Label>비회원 등록</Label>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="이름 (선택)"/>
-           <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="전화번호 (필수)"/>
+          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="이름 (선택)" />
+          <Input
+            value={phone}
+            onChange={(event) => setPhone(event.target.value)}
+            placeholder="전화번호 (필수)"
+          />
         </div>
-        <Button type="button" onClick={addTempUserByPhone} className="w-full" disabled={phoneCheckFetcher.state !== 'idle'}>
-            {phoneCheckFetcher.state !== 'idle' ? '확인 중...' : <><UserPlus className="mr-2 h-4 w-4"/> 전화번호로 추가</>}
+        <Button
+          type="button"
+          onClick={addTempUserByPhone}
+          className="w-full"
+          disabled={phoneCheckFetcher.state !== 'idle'}
+        >
+          {phoneCheckFetcher.state !== 'idle' ? (
+            '확인 중...'
+          ) : (
+            <>
+              <UserPlus className="mr-2 h-4 w-4" />
+              전화번호로 추가
+            </>
+          )}
         </Button>
       </div>
-      
-      {/* 임시 코드 발급 */}
-       <div className="space-y-2 mt-4 border-t pt-4">
+
+      <div className="space-y-2 mt-4 border-t pt-4">
         <Label className="font-semibold">임시 스탬프 코드 발급</Label>
         <div className="flex items-center gap-2 mt-2">
-          {/* Popover를 사용하여 횟수 설정 UI를 만듭니다. */}
           <Popover>
             <PopoverTrigger asChild>
               <Button type="button" variant="outline" className="w-[120px] justify-start">
@@ -211,12 +250,9 @@ export function ParticipantManager({ participants, setParticipants }: {
             <PopoverContent className="w-56 p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <Label htmlFor="unlimited-switch">무제한 사용</Label>
-                <Switch 
-                  id="unlimited-switch"
-                  checked={isUnlimited}
-                  onCheckedChange={setIsUnlimited}
-                />
+                <Switch id="unlimited-switch" checked={isUnlimited} onCheckedChange={setIsUnlimited} />
               </div>
+
               {!isUnlimited && (
                 <div>
                   <Label htmlFor="max-uses-input">사용 횟수</Label>
@@ -224,18 +260,21 @@ export function ParticipantManager({ participants, setParticipants }: {
                     id="max-uses-input"
                     type="number"
                     min="1"
-                    value={tempCodeMaxUses ?? 1} // null일 경우 1로 표시
-                    onChange={(e) => {
-                      const value = parseInt(e.target.value);
-                      setTempCodeMaxUses(isNaN(value) || value < 1 ? 1 : value); // 1 미만 숫자 방지
+                    value={tempCodeMaxUses ?? 1}
+                    onChange={(event) => {
+                      const parsed = Number.parseInt(event.target.value, 10);
+                      setTempCodeMaxUses(Number.isNaN(parsed) || parsed < 1 ? 1 : parsed);
                     }}
                   />
                 </div>
               )}
             </PopoverContent>
           </Popover>
-           {/* 유효 기간 설정 Select */}
-          <Select value={expiryOption} onValueChange={(value) => setExpiryOption(value as Participant['expiryOption'])}>
+
+          <Select
+            value={expiryOption}
+            onValueChange={(value) => setExpiryOption(value as Participant['expiryOption'])}
+          >
             <SelectTrigger className="w-full">
               <SelectValue placeholder="유효기간 선택..." />
             </SelectTrigger>
@@ -248,44 +287,23 @@ export function ParticipantManager({ participants, setParticipants }: {
           </Select>
         </div>
 
-        {/* '직접 지정' 선택 시 날짜 선택 UI */}
         {expiryOption === 'custom' && (
-          <div className="mt-2"> {/* 마진 추가 */}
+          <div className="mt-2">
             <DatePicker
               label="만료 날짜 선택"
-              value={customExpiryDate} // Date 객체 또는 null
-              onChange={(newValue) => setCustomExpiryDate(newValue as Date)}
-              minDate={new Date()} // 오늘 이전 날짜 비활성화
-              slotProps={{
-                textField: {
-                  fullWidth: true, // 너비를 꽉 채우도록
-                  size: "small",   // 크기를 작게
-                  // Tailwind CSS 클래스를 추가하고 싶다면 sx prop 사용
-                  sx: {
-                    '& .MuiOutlinedInput-root': {
-                      borderRadius: '0.5rem', // shadcn/ui의 border-radius와 유사하게
-                    },
-                    '& .MuiInputLabel-root': {
-                      // 라벨 스타일 조정
-                    },
-                  }
-                },
-              }}
-              localeText={{
-                cancelButtonLabel: "취소",
-                okButtonLabel: "확인",
-                todayButtonLabel: "오늘",
-                // 다른 텍스트도 커스텀 가능
-              }}
+              value={customExpiryDate}
+              onChange={(newValue) => setCustomExpiryDate(newValue as Date | null)}
+              minDate={new Date()}
+              slotProps={{ textField: { fullWidth: true, size: 'small' } }}
             />
           </div>
         )}
-          <Button type="button" onClick={addTempUserByCode} className="flex-grow">
-            <Ticket className="mr-2 h-4 w-4"/> 임시 스탬프 코드 발급 및 추가
-          </Button>
-        </div>
-       
+
+        <Button type="button" onClick={addTempUserByCode} className="flex-grow">
+          <Ticket className="mr-2 h-4 w-4" />
+          임시 스탬프 코드 발급 및 추가
+        </Button>
       </div>
-   
+    </div>
   );
 }

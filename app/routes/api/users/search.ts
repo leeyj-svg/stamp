@@ -1,8 +1,10 @@
-
 import { type LoaderFunctionArgs, json } from "@remix-run/node";
 import { db } from "~/lib/db.server";
+import { getSessionWithPermission } from "~/lib/auth.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  await getSessionWithPermission(request, "ADMIN");
+
   const url = new URL(request.url);
   const query = url.searchParams.get("q");
 
@@ -17,7 +19,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         { phoneNumber: { contains: query } },
       ],
     },
-    take: 10, // 검색 결과는 최대 10개로 제한
+    take: 10,
+    select: {
+      id: true,
+      name: true,
+      phoneNumber: true,
+      status: true,
+    },
   });
 
   return json({ users });

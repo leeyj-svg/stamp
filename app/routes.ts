@@ -75,6 +75,7 @@ export default [
   route("api/categories", "routes/api/categories.ts"),
   route("api/users/search", "routes/api/users/search.ts"),
   route("api/users/check", "routes/api/users/check.ts"),
+  route("api/events/search", "routes/api/events/event-search.ts"),
   route("api/events/delete", "routes/api/events/delete.ts"),
   route("api/events/reviews", "routes/api/events/reviews.ts"),
   route("api/events/:id", "routes/api/events/$id.ts"),

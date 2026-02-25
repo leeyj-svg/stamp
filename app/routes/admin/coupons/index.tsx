@@ -14,6 +14,7 @@ import { format } from "date-fns";
 import { ko } from "date-fns/locale";
 import { Switch } from "~/components/ui/switch";
 import { Label } from "~/components/ui/label";
+import { Badge } from "~/components/ui/badge";
 
 const COUPONS_PER_PAGE = 10;
 
@@ -58,6 +59,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return { coupons, totalCoupons, page, totalPages, q, status };
 };
+
+type CouponItem = Awaited<ReturnType<typeof loader>>["coupons"][number];
 
 // --- Default 컴포넌트: 쿠폰 목록 UI 렌더링 (카드 형식으로 변경) ---
 export default function AdminCouponsPage() {
@@ -131,19 +134,30 @@ export default function AdminCouponsPage() {
 }
 
 // --- 쿠폰 카드 컴포넌트 (신규) ---
-function CouponCard({ coupon }: { coupon: any }) {
+function CouponCard({ coupon }: { coupon: CouponItem }) {
   const fetcher = useFetcher();
   const isSubmitting = fetcher.state !== 'idle';
   
   const optimisticIsUsed = isSubmitting ? !coupon.isUsed : coupon.isUsed;
+  const isExpired = new Date(coupon.expiresAt).getTime() < Date.now();
+
+  const statusLabel = optimisticIsUsed ? "사용 완료" : isExpired ? "만료" : "미사용";
+  const statusVariant = optimisticIsUsed
+    ? "secondary"
+    : isExpired
+      ? "destructive"
+      : "default";
 
   return (
     <Card className={`flex flex-col transition-all ${optimisticIsUsed ? 'bg-muted/50' : 'bg-background'}`}>
       <CardHeader>
-        <CardTitle className="text-lg flex items-center gap-2">
-            <Ticket className="h-5 w-5 text-primary" />
-            {coupon.description}
-        </CardTitle>
+        <div className="flex items-start justify-between gap-2">
+          <CardTitle className="text-lg flex items-center gap-2">
+              <Ticket className="h-5 w-5 text-primary" />
+              {coupon.description}
+          </CardTitle>
+          <Badge variant={statusVariant}>{statusLabel}</Badge>
+        </div>
         <CardDescription className="font-mono text-sm pt-1">{coupon.code}</CardDescription>
       </CardHeader>
       <CardContent className="flex-grow space-y-2 text-sm">

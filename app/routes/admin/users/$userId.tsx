@@ -14,6 +14,7 @@ import { format } from "date-fns";
 import { ko } from "date-fns/locale";
 import { useState, useEffect } from "react";
 import { getFlashSession, commitSession } from "~/lib/session.server";
+import { getSessionWithPermission } from "~/lib/auth.server";
 import { Label } from "~/components/ui/label";
 import { Input } from "~/components/ui/input";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "~/components/ui/alert-dialog";
@@ -21,7 +22,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "~/components/ui/command";
 
 // --- Loader: 사용자 정보와 '활동 로그' 데이터를 함께 불러옵니다. ---
-export const loader = async ({ params }: LoaderFunctionArgs) => {
+export const loader = async ({ request, params }: LoaderFunctionArgs) => {
+  await getSessionWithPermission(request, "ADMIN");
   const userId = params.userId;
   if (!userId) throw new Response("User ID is required", { status: 400 });
 
@@ -93,6 +95,7 @@ export const loader = async ({ params }: LoaderFunctionArgs) => {
 
 // --- Action: 사용자 정보 수정, 스탬프 추가/삭제 로직을 처리합니다. ---
 export const action = async ({ request, params }: ActionFunctionArgs) => {
+  await getSessionWithPermission(request, "ADMIN");
   const userId = params.userId;
   if (!userId) throw new Response("User not found", { status: 404 });
 

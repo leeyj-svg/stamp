@@ -164,7 +164,7 @@ useEffect(() => {
                           </div>
 
                           <div className="mt-8 text-center">
-                            {isCardFull && !card.isRedeemed && (
+                                      {isCardFull && !card.isRedeemed && !card.coupon && (
                               <issueCouponFetcher.Form method="post" action="/api/coupons/issue">
                                 <input type="hidden" name="intent" value="issueCoupon" />
                                 <input type="hidden" name="stampCardId" value={card.id} />

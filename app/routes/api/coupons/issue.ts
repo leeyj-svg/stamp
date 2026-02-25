@@ -1,53 +1,94 @@
-// app/routes/api.coupons.tsx
-
-import { type ActionFunctionArgs } from "react-router"; // 👈 react-router에서 import
-import { db } from "~/lib/db.server";
-import { getSession } from "~/lib/auth.server";
+import { Prisma } from '@prisma/client';
+import { type ActionFunctionArgs } from 'react-router';
 import { customAlphabet } from 'nanoid';
-import { sendAlimtalk, AlimtalkType } from '~/lib/alimtalk.server';
-import { format } from "date-fns";
-const STAMPS_PER_CARD = 10;
+import { format } from 'date-fns';
 
+import { db } from '~/lib/db.server';
+import { getSession, getSessionWithPermission } from '~/lib/auth.server';
+import { sendAlimtalk, AlimtalkType } from '~/lib/alimtalk.server';
+
+const STAMPS_PER_CARD = 10;
 const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 12);
+
 const generateCouponCode = () => {
   const code = nanoid();
   return `STAMP-${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8, 12)}`;
 };
 
-export const action = async ({ request }: ActionFunctionArgs) => {
-  const formData = await request.formData();
-  const intent = formData.get("intent");
+class ActionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ActionError';
+  }
+}
 
-  // --- 1. 쿠폰 발급 ---
-  if (intent === "issueCoupon") {
+type ActionResult = {
+  success: boolean;
+  error?: string;
+  message?: string;
+  coupon?: {
+    id: string;
+    code: string;
+    description: string;
+    isUsed: boolean;
+    expiresAt: Date;
+    createdAt: Date;
+    stampCardId: number;
+  };
+};
+
+export const action = async ({ request }: ActionFunctionArgs): Promise<ActionResult> => {
+  const formData = await request.formData();
+  const intent = formData.get('intent');
+
+  if (intent === 'issueCoupon') {
     const { user } = await getSession(request);
     if (!user) {
-      // 오류는 Response 객체를 throw하여 상태 코드를 명확히 전달
-      throw new Response("로그인이 필요합니다.", { status: 401 });
+      return { success: false, error: '로그인이 필요합니다.' };
     }
 
-    const stampCard = await db.stampCard.findFirst({
-      where: { userId: user.id, isRedeemed: false },
-      include: { _count: { select: { entries: true } } },
-    });
-
-    if (!stampCard) {
-      throw new Response("유효한 스탬프 카드를 찾을 수 없습니다.", { status: 404 });
-    }
-
-    if (stampCard._count.entries < STAMPS_PER_CARD) {
-      throw new Response(`스탬프 ${STAMPS_PER_CARD}개를 모두 모아야 쿠폰을 받을 수 있습니다.`, { status: 400 });
+    const stampCardIdRaw = formData.get('stampCardId');
+    const stampCardId = Number(stampCardIdRaw);
+    if (!Number.isInteger(stampCardId) || stampCardId <= 0) {
+      return { success: false, error: '유효하지 않은 스탬프 카드입니다.' };
     }
 
     try {
-      const expiresAt = new Date();
-      expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+      const { coupon, expiresAt } = await db.$transaction(async (prisma) => {
+        const stampCard = await prisma.stampCard.findFirst({
+          where: { id: stampCardId, userId: user.id },
+          select: {
+            id: true,
+            isRedeemed: true,
+            coupon: { select: { id: true } },
+            _count: { select: { entries: true } },
+          },
+        });
 
-      const newCoupon = await db.$transaction(async (prisma) => {
-        await prisma.stampCard.update({
-          where: { id: stampCard.id },
+        if (!stampCard) {
+          throw new ActionError('스탬프 카드를 찾을 수 없습니다.');
+        }
+
+        if (stampCard.coupon || stampCard.isRedeemed) {
+          throw new ActionError('이미 쿠폰이 발급된 카드입니다.');
+        }
+
+        if (stampCard._count.entries < STAMPS_PER_CARD) {
+          throw new ActionError(`스탬프 ${STAMPS_PER_CARD}개를 모두 모아야 쿠폰을 발급할 수 있습니다.`);
+        }
+
+        const expiresAt = new Date();
+        expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+
+        const cardUpdate = await prisma.stampCard.updateMany({
+          where: { id: stampCard.id, userId: user.id, isRedeemed: false },
           data: { isRedeemed: true },
         });
+
+        if (cardUpdate.count === 0) {
+          throw new ActionError('이미 처리된 카드입니다. 새로고침 후 다시 확인해주세요.');
+        }
+
         const coupon = await prisma.coupon.create({
           data: {
             code: generateCouponCode(),
@@ -56,61 +97,89 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             stampCardId: stampCard.id,
           },
         });
-        return coupon;
-      });
- await sendAlimtalk(
-        AlimtalkType.COUPON_ISSUED,
-        user.phoneNumber,
-        {
-          '고객명': user.name,
-          '쿠폰설명': newCoupon.description,
-          '만료일자': format(expiresAt, "yyyy-MM-dd"),
-          'link': `${process.env.APP_URL}/card`
-        }
-      );
-      // 성공 시, 순수 객체 반환
-      return { success: true, coupon: newCoupon };
 
+        return { coupon, expiresAt };
+      });
+
+      const appUrl = process.env.APP_URL ?? new URL(request.url).origin;
+      sendAlimtalk(AlimtalkType.COUPON_ISSUED, user.phoneNumber, {
+        고객명: user.name,
+        쿠폰설명: coupon.description,
+        만료일자: format(expiresAt, 'yyyy-MM-dd'),
+        link: `${appUrl}/card`,
+      }).catch((error) => {
+        console.error('쿠폰 알림톡 발송 실패:', error);
+      });
+
+      return {
+        success: true,
+        message: '쿠폰이 성공적으로 발급되었습니다.',
+        coupon,
+      };
     } catch (error) {
-      console.error("쿠폰 발급 중 오류 발생:", error);
-      throw new Response("쿠폰을 발급하는 중 문제가 발생했습니다.", { status: 500 });
+      if (error instanceof ActionError) {
+        return { success: false, error: error.message };
+      }
+
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const target = String((error.meta as { target?: unknown })?.target ?? '');
+        if (target.includes('stampCardId')) {
+          return { success: false, error: '이미 쿠폰이 발급된 카드입니다.' };
+        }
+        if (target.includes('code')) {
+          return { success: false, error: '쿠폰 코드 생성 중 충돌이 발생했습니다. 다시 시도해주세요.' };
+        }
+      }
+
+      console.error('쿠폰 발급 오류:', error);
+      return { success: false, error: '쿠폰 발급 중 오류가 발생했습니다.' };
     }
   }
 
-  // --- 2. 쿠폰 사용 여부 토글 ---
-  if (intent === "toggleCouponStatus") {
-    // TODO: 관리자 권한 확인
-    
-    const couponId = formData.get("couponId");
-    if (typeof couponId !== "string" || !couponId) {
-      throw new Response("유효하지 않은 쿠폰 ID입니다.", { status: 400 });
+  if (intent === 'toggleCouponStatus') {
+    await getSessionWithPermission(request, 'ADMIN');
+
+    const couponId = formData.get('couponId');
+    if (typeof couponId !== 'string' || !couponId) {
+      return { success: false, error: '유효하지 않은 쿠폰 ID입니다.' };
     }
 
     try {
-      const coupon = await db.coupon.findUnique({ where: { id: couponId } });
-      if (!coupon) {
-        throw new Response("쿠폰을 찾을 수 없습니다.", { status: 404 });
+      const updatedCoupon = await db.$transaction(async (prisma) => {
+        const coupon = await prisma.coupon.findUnique({
+          where: { id: couponId },
+          select: { id: true, isUsed: true, stampCardId: true },
+        });
+
+        if (!coupon) {
+          throw new ActionError('쿠폰을 찾을 수 없습니다.');
+        }
+
+        const nextIsUsed = !coupon.isUsed;
+        const updated = await prisma.coupon.update({
+          where: { id: coupon.id },
+          data: { isUsed: nextIsUsed },
+        });
+
+        // 쿠폰 발급된 카드는 항상 redeemed 상태를 유지합니다.
+        await prisma.stampCard.update({
+          where: { id: coupon.stampCardId },
+          data: { isRedeemed: true },
+        });
+
+        return updated;
+      });
+
+      return { success: true, coupon: updatedCoupon };
+    } catch (error) {
+      if (error instanceof ActionError) {
+        return { success: false, error: error.message };
       }
 
-      const updatedCoupon = await db.coupon.update({
-        where: { id: couponId },
-        data: { isUsed: !coupon.isUsed },
-      });
-
-      await db.stampCard.update({
-        where: { id: updatedCoupon.stampCardId },
-        data: { isRedeemed: updatedCoupon.isUsed },
-      });
-
-      // 성공 시, 순수 객체 반환
-      return { success: true, coupon: updatedCoupon };
-
-    } catch (error) {
-      console.error("쿠폰 상태 업데이트 중 오류 발생:", error);
-      throw new Response("쿠폰 상태를 업데이트할 수 없습니다.", { status: 500 });
+      console.error('쿠폰 상태 변경 오류:', error);
+      return { success: false, error: '쿠폰 상태를 업데이트할 수 없습니다.' };
     }
   }
 
-  // 일치하는 intent가 없는 경우
-  throw new Response("알 수 없는 요청입니다.", { status: 400 });
+  return { success: false, error: '지원하지 않는 요청입니다.' };
 };

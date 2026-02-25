@@ -113,7 +113,7 @@ function Header({ user, currentView }: { user: any, currentView: 'pc' | 'mobile'
                 관리자 메뉴를 통해 각 항목으로 이동하세요.
               </SheetDescription>
             </SheetHeader>
-            <SidebarNav inSheet={false} />
+            <SidebarNav inSheet={true} />
           </SheetContent>
         </Sheet>
       )}

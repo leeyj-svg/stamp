@@ -6,16 +6,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   await getSessionWithPermission(request, "ADMIN");
 
   const url = new URL(request.url);
-  const phone = url.searchParams.get("phone")?.replace(/-/g, "").trim();
+  const query = url.searchParams.get("q")?.trim();
 
-  if (!phone) {
-    return json({ exists: false, isUser: false });
+  if (!query) {
+    return json({ events: [] });
   }
 
-  const user = await db.user.findUnique({
-    where: { phoneNumber: phone },
-    select: { id: true, status: true },
+  const events = await db.event.findMany({
+    where: {
+      name: { contains: query },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 10,
+    select: {
+      id: true,
+      name: true,
+    },
   });
 
-  return json({ exists: !!user, isUser: user?.status === "ACTIVE" });
+  return json({ events });
 };
