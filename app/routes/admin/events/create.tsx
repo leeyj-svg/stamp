@@ -10,7 +10,7 @@ import dayjs from 'dayjs';
 import { UserStatus } from '@prisma/client';
 
 import { EventForm } from '~/components/eventform';
-import { getSessionWithPermission } from '~/lib/auth.server';
+import { assertCategoryAccess, requireAdminAccessScope } from '~/lib/admin-access.server';
 import { db } from '~/lib/db.server';
 import { sendAlimtalk, AlimtalkType } from '~/lib/alimtalk.server';
 import { commitSession, getFlashSession } from '~/lib/session.server';
@@ -19,8 +19,11 @@ import { uploadImages } from '~/lib/upload.server';
 const STAMPS_PER_CARD = 10;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await getSessionWithPermission(request, 'ADMIN');
-  const categories = await db.eventCategory.findMany();
+  const scope = await requireAdminAccessScope(request);
+  const categories = await db.eventCategory.findMany({
+    where: scope.isAdmin ? {} : { id: { in: scope.managedCategoryIds } },
+    orderBy: { name: 'asc' },
+  });
   return { categories };
 };
 
@@ -39,7 +42,7 @@ const participantSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['id'],
-        message: '?꾪솕踰덊샇 ?뺤떇???щ컮瑜댁? ?딆뒿?덈떎.',
+        message: '전화번호 형식이 올바르지 않습니다.',
       });
     }
 
@@ -48,7 +51,7 @@ const participantSchema = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['id'],
-          message: '?꾩떆 肄붾뱶 ?뺤떇???щ컮瑜댁? ?딆뒿?덈떎.',
+          message: '임시 코드 형식이 올바르지 않습니다.',
         });
       }
 
@@ -57,13 +60,13 @@ const participantSchema = z
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['customExpiryDate'],
-            message: '吏곸젒 吏??留뚮즺?쇱씠 ?꾩슂?⑸땲??',
+            message: '직접 지정 만료일이 필요합니다.',
           });
         } else if (Number.isNaN(Date.parse(participant.customExpiryDate))) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['customExpiryDate'],
-            message: '留뚮즺???뺤떇???щ컮瑜댁? ?딆뒿?덈떎.',
+            message: '만료일 형식이 올바르지 않습니다.',
           });
         }
       }
@@ -72,25 +75,25 @@ const participantSchema = z
 
 const eventFormSchema = z
   .object({
-    name: z.string().min(2, '?대깽???대쫫? 2湲???댁긽?댁뼱???⑸땲??'),
+    name: z.string().min(2, '이벤트 이름은 2글자 이상이어야 합니다.'),
     description: z.string().optional(),
     imageUrl: z.any().optional(),
     isAllDay: z.boolean(),
-    categoryId: z.string().min(1, '移댄뀒怨좊━瑜??좏깮?댁＜?몄슂.'),
+    categoryId: z.string().min(1, '카테고리를 선택해주세요.'),
     startDate: z.date().refine((date) => date, {
-      message: '?쒖옉 ?좎쭨瑜??좏깮?댁＜?몄슂.',
+      message: '시작 날짜를 선택해주세요.',
     }),
     endDate: z.date().refine((date) => date, {
-      message: '醫낅즺 ?좎쭨瑜??좏깮?댁＜?몄슂.',
+      message: '종료 날짜를 선택해주세요.',
     }),
-    participants: z.array(participantSchema).min(1, '李멸??먮? ??紐??댁긽 ?깅줉?댁＜?몄슂.'),
+    participants: z.array(participantSchema).min(1, '참가자를 1명 이상 등록해주세요.'),
   })
   .superRefine((data, ctx) => {
     if (data.endDate < data.startDate) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['endDate'],
-        message: '醫낅즺?쇱? ?쒖옉?쇰낫??鍮좊? ???놁뒿?덈떎.',
+        message: '종료일은 시작일보다 빠를 수 없습니다.',
       });
     }
 
@@ -101,7 +104,7 @@ const eventFormSchema = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['participants', index, 'id'],
-          message: '以묐났??李멸??먭? ?ы븿?섏뼱 ?덉뒿?덈떎.',
+          message: '중복된 참가자가 포함되어 있습니다.',
         });
       }
       seen.add(key);
@@ -122,7 +125,7 @@ async function errorResponse(request: Request, message: string, status = 400) {
 }
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  await getSessionWithPermission(request, 'ADMIN');
+  const scope = await requireAdminAccessScope(request);
   const formData = await request.formData();
 
   const participantsField = formData.get('participants');
@@ -132,12 +135,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     try {
       participantsPayload = JSON.parse(participantsField);
     } catch {
-      return errorResponse(request, '李멸????뺣낫 ?뺤떇???щ컮瑜댁? ?딆뒿?덈떎.');
+      return errorResponse(request, '참가자 정보 형식이 올바르지 않습니다.');
     }
   }
 
   if (!Array.isArray(participantsPayload)) {
-    return errorResponse(request, '李멸????뺣낫 ?뺤떇???щ컮瑜댁? ?딆뒿?덈떎.');
+    return errorResponse(request, '참가자 정보 형식이 올바르지 않습니다.');
   }
 
   const result = eventFormSchema.safeParse({
@@ -155,12 +158,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const firstErrorMessage =
       Object.values(error.fieldErrors).flat()[0] ||
       error.formErrors[0] ||
-      '?낅젰媛믪씠 ?щ컮瑜댁? ?딆뒿?덈떎.';
+      '입력값이 올바르지 않습니다.';
 
     return errorResponse(request, firstErrorMessage);
   }
 
   const { name, description, categoryId, isAllDay, startDate, endDate, participants } = result.data;
+  assertCategoryAccess(scope, Number(categoryId));
   const imageFiles = formData
     .getAll('images')
     .filter((value): value is File => value instanceof File && value.size > 0);
@@ -188,7 +192,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (missingPhones.length > 0) {
         await db.user.createMany({
           data: missingPhones.map((phoneNumber) => ({
-            name: nameByPhone.get(phoneNumber) ?? `?꾩떆?뚯썝-${phoneNumber.slice(-4)}`,
+            name: nameByPhone.get(phoneNumber) ?? `임시회원-${phoneNumber.slice(-4)}`,
             phoneNumber,
             status: UserStatus.TEMPORARY,
           })),
@@ -213,7 +217,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
 
       if (existingCodes.length > 0) {
-        return errorResponse(request, '?대? ?ъ슜 以묒씤 ?꾩떆 肄붾뱶媛 ?ы븿?섏뼱 ?덉뒿?덈떎.');
+        return errorResponse(request, '이미 사용 중인 임시 코드가 포함되어 있습니다.');
       }
     }
 
@@ -348,15 +352,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const flashSession = await getFlashSession(request.headers.get('Cookie'));
     flashSession.flash('toast', {
       type: 'success',
-      message: '?대깽?멸? ?깃났?곸쑝濡??깅줉?섏뿀?듬땲??',
+      message: '이벤트가 성공적으로 등록되었습니다.',
     });
 
     return redirect('/admin/events', {
       headers: [['Set-Cookie', await commitSession(flashSession)]],
     });
   } catch (error) {
-    console.error('?대깽???깅줉 ?ㅽ뙣:', error);
-    return errorResponse(request, '?대깽???깅줉 以??ㅻ쪟媛 諛쒖깮?덉뒿?덈떎.', 500);
+    console.error('이벤트 등록 실패:', error);
+    return errorResponse(request, '이벤트 등록 중 오류가 발생했습니다.', 500);
   }
 };
 
@@ -366,4 +370,3 @@ export default function CreateEventPage() {
 
   return <EventForm fetcher={fetcher} categories={categories} />;
 }
-

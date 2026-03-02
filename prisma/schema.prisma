@@ -40,6 +40,11 @@ model User {
   ClaimableStampRedemption ClaimableStampRedemption[]
   memorySpaces             MemorySpace[]
   memoryPosts              MemoryPost[]
+  eventLikes               EventLike[]
+  categoryManagerAssignments EventCategoryManager[]
+  uploadedAlbumPhotos      AlbumPhoto[]
+  communityPosts           CommunityPost[]
+  communityPostLikes       CommunityPostLike[]
 }
 
 model Session {
@@ -61,9 +66,10 @@ model Key {
 // --- 이벤트 및 스탬프 관련 모델 ---
 
 model EventCategory {
-  id     Int     @id @default(autoincrement())
-  name   String  @unique
-  events Event[]
+  id       Int                    @id @default(autoincrement())
+  name     String                 @unique
+  events   Event[]
+  managers EventCategoryManager[]
 }
 
 model Event {
@@ -84,6 +90,32 @@ model Event {
   images EventImage[]
 
   reviews Review[]
+  likes   EventLike[]
+}
+
+model EventLike {
+  eventId   String
+  userId    String
+  createdAt DateTime @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, userId])
+  @@index([userId])
+}
+
+model EventCategoryManager {
+  id         Int      @id @default(autoincrement())
+  userId     String
+  categoryId Int
+  createdAt  DateTime @default(now())
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category EventCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId])
+  @@index([categoryId])
 }
 
 model EventImage {
@@ -224,4 +256,57 @@ model MemoryPost {
   aiStyle   Json?
   password  String?
   createdAt DateTime @default(now())
+}
+
+model PhotoAlbum {
+  id          Int         @id @default(autoincrement())
+  name        String      @unique
+  slug        String      @unique
+  immichAlbumId String?   @unique
+  description String?
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  photos      AlbumPhoto[]
+}
+
+model AlbumPhoto {
+  id               Int        @id @default(autoincrement())
+  albumId          Int
+  album            PhotoAlbum @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  imageUrl         String
+  immichAssetId    String?
+  caption          String?
+  uploadedByUserId String?
+  uploadedByUser   User?      @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  uploaderName     String?
+  takenAt          DateTime?
+  createdAt        DateTime   @default(now())
+
+  @@index([albumId, createdAt])
+  @@index([immichAssetId])
+}
+
+model CommunityPost {
+  id        Int                 @id @default(autoincrement())
+  title     String
+  content   String              @db.Text
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  userId    String
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  likes     CommunityPostLike[]
+
+  @@index([createdAt])
+}
+
+model CommunityPostLike {
+  postId    Int
+  userId    String
+  createdAt DateTime      @default(now())
+  post      CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([postId, userId])
+  @@index([userId])
 }

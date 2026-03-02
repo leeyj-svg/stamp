@@ -5,7 +5,7 @@ import { useLoaderData, useFetcher, type LoaderFunctionArgs, type ActionFunction
 import { db } from "~/lib/db.server";
 import { EventForm } from "~/components/eventform";
 import { getFlashSession, commitSession } from "~/lib/session.server";
-import { getSessionWithPermission } from "~/lib/auth.server";
+import { assertCategoryAccess, requireAdminAccessScope } from "~/lib/admin-access.server";
 import { uploadImages } from "~/lib/upload.server";
 import type { Participant } from "~/components/participantManager";
 import * as z from 'zod';
@@ -18,7 +18,7 @@ const STAMPS_PER_CARD = 10;
 
 // loader: URL의 eventId를 사용해 수정할 이벤트의 데이터를 불러옵니다.
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-    await getSessionWithPermission(request, "ADMIN");
+    const scope = await requireAdminAccessScope(request);
     const eventId = params.eventId;
     if (!eventId) {
         throw new Response("Event not found", { status: 404 });
@@ -46,13 +46,17 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
                 },
             },
         }),
-        db.eventCategory.findMany(),
+        db.eventCategory.findMany({
+            where: scope.isAdmin ? {} : { id: { in: scope.managedCategoryIds } },
+            orderBy: { name: "asc" },
+        }),
 
     ]);
 
     if (!event) {
         throw new Response("Event not found", { status: 404 });
     }
+    assertCategoryAccess(scope, event.categoryId);
 
     // ✨ 기존 참가자 데이터를 Participant 타입으로 변환하는 로직 (PII 최소화)
     const defaultParticipants: Participant[] = [];
@@ -123,7 +127,7 @@ const eventFormSchema = z.object({
 
 // action: 폼 제출 시, 데이터를 받아 이벤트를 '수정'합니다.
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-    await getSessionWithPermission(request, "ADMIN");
+    const scope = await requireAdminAccessScope(request);
     const eventId = params.eventId!;
     if (!eventId) {
         // 🚨 new Response 사용
@@ -163,6 +167,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
 
     const { name, description, categoryId, isAllDay, startDate, endDate } = result.data;
+    assertCategoryAccess(scope, Number(categoryId));
     const eventEndDate = endDate;
 
     // 2. 이미지 및 참가자 데이터는 별도로 처리합니다.

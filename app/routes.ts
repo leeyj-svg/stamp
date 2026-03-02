@@ -19,6 +19,12 @@ export default [
     route("card", "routes/card/index.tsx"),
     route("events", "routes/events/index.tsx"),
     route("events/:id", "routes/events/$id.tsx"),
+    route("albums", "routes/albums/index.tsx"),
+    route("albums/upload", "routes/albums/upload.tsx"),
+    route("albums/:albumId", "routes/albums/$albumId.tsx"),
+    route("community", "routes/community/index.tsx"),
+    route("community/new", "routes/community/new.tsx"),
+    route("community/:postId", "routes/community/$postId.tsx"),
     route("claim", "routes/claim.tsx"),
     route("mypage", "routes/mypage.tsx"),
     route("memory/new", "routes/memory/new.tsx"),
@@ -52,10 +58,17 @@ export default [
     // 👇 route(...)를 prefix(...)로 변경합니다.
     ...prefix("events", [
       index("routes/admin/events/index.tsx"),
+      route("stats", "routes/admin/events/stats.tsx"),
       route("create", "routes/admin/events/create.tsx"),
       route(":eventId/edit", "routes/admin/events/$eventId/edit.tsx"),
       route(":eventId", "routes/admin/events/$eventId/index.tsx"),
 
+    ]),
+    ...prefix("albums", [
+      index("routes/admin/albums/index.tsx"),
+    ]),
+    ...prefix("categories", [
+      route("managers", "routes/admin/categories/managers.tsx"),
     ]),
     ...prefix("coupons", [
       index("routes/admin/coupons/index.tsx"),
@@ -79,6 +92,8 @@ export default [
   route("api/events/delete", "routes/api/events/delete.ts"),
   route("api/events/reviews", "routes/api/events/reviews.ts"),
   route("api/events/:id", "routes/api/events/$id.ts"),
+  route("api/events/:id/like", "routes/api/events/$id.like.ts"),
+  route("api/community/:postId/like", "routes/api/community/$postId.like.ts"),
   route("api/stamps/view", "routes/api/stamps/view.ts"),
   route("api/coupons/issue", "routes/api/coupons/issue.ts"),
 ] satisfies RouteConfig;
