@@ -1,139 +1,157 @@
-// app/routes/admin/users/index.tsx
-
-import { Link, type LoaderFunctionArgs } from "react-router";
-import { useLoaderData, Form, useSearchParams } from "react-router";
-import { db } from "~/lib/db.server";
-import { Button } from "~/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "~/components/ui/table";
-import { Input } from "~/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
-import { Pagination, PaginationContent, PaginationItem, PaginationPrevious, PaginationNext } from "~/components/ui/pagination";
-import { Badge } from "~/components/ui/badge";
-import { Award, Calendar, CreditCard, Phone, Search, UserCircle } from "lucide-react";
+import { Form, Link, useLoaderData, useSearchParams, type LoaderFunctionArgs } from "react-router";
+import type { Prisma, Role, UserStatus } from "@prisma/client";
 import { format } from "date-fns";
 import { ko } from "date-fns/locale";
+import { Award, Calendar, CreditCard, Phone, Search, UserCircle } from "lucide-react";
 import { useState } from "react";
-import type { Prisma, Role, UserStatus } from "@prisma/client";
+
+import { Badge } from "~/components/ui/badge";
+import { Button } from "~/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
+import { Input } from "~/components/ui/input";
+import { Pagination, PaginationContent, PaginationItem, PaginationNext, PaginationPrevious } from "~/components/ui/pagination";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
+import { getSessionWithPermission } from "~/lib/auth.server";
+import { db } from "~/lib/db.server";
+
 const USERS_PER_PAGE = 10;
 
-// --- Loader: 사용자 목록을 검색/필터링/페이지네이션 기능과 함께 불러옵니다. ---
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  await getSessionWithPermission(request, "ADMIN");
+
   const url = new URL(request.url);
   const q = url.searchParams.get("q") || "";
-  const role = url.searchParams.get("role") as Role | 'all' || 'all';
-  const status = url.searchParams.get("status") as UserStatus | 'all' || 'all';
-  const page = parseInt(url.searchParams.get("page") || "1");
+  const role = (url.searchParams.get("role") as Role | "all" | null) || "all";
+  const status = (url.searchParams.get("status") as UserStatus | "all" | null) || "all";
+  const page = Number.parseInt(url.searchParams.get("page") || "1", 10);
 
   const where: Prisma.UserWhereInput = {
     AND: [
-      q ? {
-        OR: [
-          { name: { contains: q } },
-          { phoneNumber: { contains: q.replace(/-/g, '') } },
-        ],
-      } : {},
-      role !== 'all' ? { role: role } : {},
-      status !== 'all' ? { status: status } : {},
+      q
+        ? {
+            OR: [
+              { name: { contains: q } },
+              { phoneNumber: { contains: q.replace(/-/g, "") } },
+            ],
+          }
+        : {},
+      role !== "all" ? { role } : {},
+      status !== "all" ? { status } : {},
     ],
   };
 
   const [rawUsers, totalUsers] = await db.$transaction([
     db.user.findMany({
       where,
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
       skip: (page - 1) * USERS_PER_PAGE,
       take: USERS_PER_PAGE,
       include: {
         _count: {
-          select: { 
-            eventEntries: true, 
+          select: {
+            eventEntries: true,
             StampCard: true,
-          }
+          },
         },
         StampCard: {
           include: {
             coupon: {
-              select: { id: true }
-            }
-          }
-        }
-      }
+              select: { id: true },
+            },
+          },
+        },
+      },
     }),
     db.user.count({ where }),
   ]);
 
-  const users = rawUsers.map(user => {
-    const couponCount = user.StampCard.filter(card => card.coupon !== null).length;
-    const { StampCard, ...rest } = user; 
-    return { 
-      ...rest, 
+  const users = rawUsers.map((user) => {
+    const couponCount = user.StampCard.filter((card) => card.coupon !== null).length;
+    const { StampCard, ...rest } = user;
+    return {
+      ...rest,
       couponCount,
-      createdAtFormatted: format(new Date(user.createdAt), "yyyy.MM.dd", { locale: ko })
+      createdAtFormatted: format(new Date(user.createdAt), "yyyy.MM.dd", { locale: ko }),
     };
   });
 
-  const totalPages = Math.ceil(totalUsers / USERS_PER_PAGE);
-
-  return { users, totalUsers, page, totalPages, q, role, status };
+  return {
+    users,
+    totalUsers,
+    page,
+    totalPages: Math.ceil(totalUsers / USERS_PER_PAGE),
+    q,
+    role,
+    status,
+  };
 };
 
-// --- Default 컴포넌트: 사용자 목록 UI ---
 export default function AdminUsersPage() {
   const { users, totalUsers, page, totalPages, q, role, status } = useLoaderData<typeof loader>();
   const [searchParams] = useSearchParams();
-  const [isSearchVisible, setIsSearchVisible] = useState(!!q || role !== 'all' || status !== 'all'); 
+  const [isSearchVisible, setIsSearchVisible] = useState(!!q || role !== "all" || status !== "all");
 
-  const getPageLink = (p: number) => {
+  const getPageLink = (targetPage: number) => {
     const newParams = new URLSearchParams(searchParams);
-    newParams.set("page", String(p));
+    newParams.set("page", String(targetPage));
     return `/admin/users?${newParams.toString()}`;
   };
- const getRoleBadgeVariant = (userRole: Role|null) => {
+
+  const getRoleBadgeVariant = (userRole: Role | null) => {
     switch (userRole) {
-      case "ADMIN": return "destructive"; 
-      case "MEMBER": return "default";  
-      case "USER": return "outline";    
-      default: return "secondary";
+      case "ADMIN":
+        return "destructive";
+      case "MEMBER":
+        return "default";
+      case "USER":
+        return "outline";
+      default:
+        return "secondary";
     }
   };
 
-
-   const getStatusBadgeVariant = (userStatus: UserStatus) => {
+  const getStatusBadgeVariant = (userStatus: UserStatus) => {
     switch (userStatus) {
-      case "ACTIVE": return "secondary";     // 👈 UserStatus.ACTIVE 대신 문자열 "ACTIVE" 사용
-      case "TEMPORARY": return "outline";  // 👈 UserStatus.TEMPORARY 대신 문자열 "TEMPORARY" 사용
-      default: return "secondary";
+      case "ACTIVE":
+        return "secondary";
+      case "TEMPORARY":
+        return "outline";
+      default:
+        return "secondary";
     }
   };
 
- return (
+  return (
     <div className="flex flex-col gap-4">
       <Card>
         <CardHeader>
-          <div className="flex justify-between items-center">
+          <div className="flex items-center justify-between">
             <div>
-              <CardTitle>사용자 관리</CardTitle>
-              <CardDescription>총 {totalUsers}명의 사용자가 있습니다.</CardDescription>
+              <CardTitle>회원 관리</CardTitle>
+              <CardDescription>총 {totalUsers}명의 회원이 있습니다.</CardDescription>
             </div>
-            <Button variant="ghost" size="icon" onClick={() => setIsSearchVisible(prev => !prev)}>
+            <Button variant="ghost" size="icon" onClick={() => setIsSearchVisible((prev) => !prev)}>
               <Search className="h-5 w-5" />
               <span className="sr-only">검색창 열기/닫기</span>
             </Button>
           </div>
         </CardHeader>
         <CardContent>
-          {/* --- 검색 및 필터 UI --- */}
           {isSearchVisible && (
-            <Form method="get" className="flex flex-col md:flex-row gap-2 mb-4 p-4 border rounded-lg bg-muted/50">
-              <Input name="q" placeholder="이름, 전화번호로 검색..." defaultValue={q || ""} className="flex-grow" />
+            <Form method="get" className="mb-4 flex flex-col gap-2 rounded-lg border bg-muted/50 p-4 md:flex-row">
+              <Input
+                name="q"
+                placeholder="이름, 전화번호 검색"
+                defaultValue={q || ""}
+                className="flex-grow"
+              />
               <Select name="role" defaultValue={role || "all"}>
                 <SelectTrigger className="w-full md:w-[160px]">
-                  <SelectValue placeholder="모든 역할" />
+                  <SelectValue placeholder="모든 권한" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">모든 역할</SelectItem>
-                 <SelectItem value="USER">일반사용자</SelectItem>
+                  <SelectItem value="all">모든 권한</SelectItem>
+                  <SelectItem value="USER">일반 사용자</SelectItem>
                   <SelectItem value="MEMBER">멤버</SelectItem>
                   <SelectItem value="ADMIN">관리자</SelectItem>
                 </SelectContent>
@@ -148,52 +166,53 @@ export default function AdminUsersPage() {
                   <SelectItem value="TEMPORARY">임시</SelectItem>
                 </SelectContent>
               </Select>
-              <Button type="submit" className="w-full md:w-auto"><Search className="h-4 w-4 mr-2" /> 검색</Button>
+              <Button type="submit" className="w-full md:w-auto">
+                <Search className="mr-2 h-4 w-4" />
+                검색
+              </Button>
             </Form>
           )}
 
-          {/* --- 사용자 목록 카드 --- */}
           {users.length === 0 ? (
-            <div className="text-center py-20 border-dashed border-2 rounded-lg">
+            <div className="rounded-lg border-2 border-dashed py-20 text-center">
               <h3 className="text-lg font-semibold">검색 결과가 없습니다.</h3>
-              <p className="text-sm text-muted-foreground mt-2">다른 검색어나 필터를 사용해보세요.</p>
+              <p className="mt-2 text-sm text-muted-foreground">검색어나 필터를 변경해 보세요.</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-4">
               {users.map((user) => (
                 <Link to={`/admin/users/${user.id}`} key={user.id} className="block">
-                  <Card className="h-full hover:shadow-lg transition-shadow duration-200">
+                  <Card className="h-full transition-shadow duration-200 hover:shadow-lg">
                     <CardHeader className="pb-2">
                       <div className="flex items-center gap-2">
                         <UserCircle className="h-6 w-6 text-primary" />
                         <CardTitle className="text-lg font-semibold">{user.name}</CardTitle>
                       </div>
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="mt-1 flex items-center gap-2">
                         <Badge variant={getRoleBadgeVariant(user.role)}>{user.role}</Badge>
                         <Badge variant={getStatusBadgeVariant(user.status)}>{user.status}</Badge>
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-2">
                       <div className="flex items-center text-sm text-muted-foreground">
-                        <Phone className="h-4 w-4 mr-2" />
-                        <span>{user.phoneNumber.replace(/(\d{3})(\d{4})(\d{4})/, '$1-$2-$3')}</span>
+                        <Phone className="mr-2 h-4 w-4" />
+                        <span>{user.phoneNumber.replace(/(\d{3})(\d{4})(\d{4})/, "$1-$2-$3")}</span>
                       </div>
                       <div className="flex items-center text-sm text-muted-foreground">
-                        <Calendar className="h-4 w-4 mr-2" />
-                        <span>가입: {user.createdAtFormatted}</span>
+                        <Calendar className="mr-2 h-4 w-4" />
+                        <span>가입일 {user.createdAtFormatted}</span>
                       </div>
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground pt-2 border-t mt-3">
+                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t pt-2 text-sm text-muted-foreground">
                         <div className="flex items-center">
-                          <CreditCard className="h-4 w-4 mr-1.5" />
+                          <CreditCard className="mr-1.5 h-4 w-4" />
                           <span className="font-medium text-foreground">{user._count.StampCard}</span> 스탬프 카드
                         </div>
                         <div className="flex items-center">
-                          <Award className="h-4 w-4 mr-1.5" />
-                          {/* 🚨 loader에서 계산된 couponCount를 사용합니다. */}
+                          <Award className="mr-1.5 h-4 w-4" />
                           <span className="font-medium text-foreground">{user.couponCount}</span> 쿠폰
                         </div>
                         <div className="flex items-center">
-                          <Search className="h-4 w-4 mr-1.5" />
+                          <Search className="mr-1.5 h-4 w-4" />
                           <span className="font-medium text-foreground">{user._count.eventEntries}</span> 이벤트 참여
                         </div>
                       </div>
@@ -204,7 +223,6 @@ export default function AdminUsersPage() {
             </div>
           )}
 
-          {/* --- 페이지네이션 --- */}
           {totalPages > 1 && (
             <Pagination className="mt-8">
               <PaginationContent>
@@ -212,7 +230,9 @@ export default function AdminUsersPage() {
                   <PaginationPrevious href={page > 1 ? getPageLink(page - 1) : undefined} />
                 </PaginationItem>
                 <PaginationItem>
-                  <span className="p-2 text-sm font-medium">{page} / {totalPages}</span>
+                  <span className="p-2 text-sm font-medium">
+                    {page} / {totalPages}
+                  </span>
                 </PaginationItem>
                 <PaginationItem>
                   <PaginationNext href={page < totalPages ? getPageLink(page + 1) : undefined} />

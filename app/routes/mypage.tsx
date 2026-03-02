@@ -1,79 +1,140 @@
-// app/routes/mypage.tsx
+import { Link, redirect, useLoaderData, useNavigation, type ActionFunctionArgs, type LoaderFunctionArgs } from "react-router";
 
-import { type ActionFunctionArgs, type LoaderFunctionArgs, redirect } from "react-router";
-import { useFetcher, useLoaderData, Link, useSearchParams } from "react-router"; // useSearchParams 추가
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import * as z from "zod";
-
-import { db } from "~/lib/db.server";
-import { getSession, verifyPassword, hashPassword } from "~/lib/auth.server";
-import { getFlashSession, commitSession } from "~/lib/session.server";
-
+import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "~/components/ui/form";
 import { Input } from "~/components/ui/input";
-import { Badge } from "~/components/ui/badge";
+import { Label } from "~/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
-import { User, KeyRound, LayoutGrid, MessageSquare, ExternalLink, ChevronLeft, ChevronRight } from "lucide-react"; // 화살표 아이콘 추가
+import { db } from "~/lib/db.server";
+import { getSession, hashPassword, verifyPassword } from "~/lib/auth.server";
+import { commitSession, getFlashSession } from "~/lib/session.server";
 
-// --- Loader: 사용자 정보 + 내 우주 + 내 글 불러오기 (페이징 적용) ---
+const PASSWORD_RULE = /^(?=.*[A-Za-z])(?=.*\d).{8,}$/;
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { user } = await getSession(request);
   if (!user) {
     return redirect("/login?redirectTo=/mypage");
   }
 
-  // 1. URL에서 페이지 번호 파싱
-  const url = new URL(request.url);
-  const page = parseInt(url.searchParams.get("page") || "1", 10);
-  const pageSize = 10; // 한 페이지당 보여줄 글 개수
-  const skip = (page - 1) * pageSize;
-
-  // 2. 내가 만든 우주(방) 조회 (여기는 전체 조회 유지)
-  const mySpaces = await db.memorySpace.findMany({
-    where: { userId: user.id },
-    orderBy: { createdAt: "desc" },
-    include: {
-      _count: { select: { posts: true } }
-    }
-  });
-
-  // 3. 내가 쓴 글 조회 (페이징 + 전체 개수 카운트)
-  // Promise.all로 병렬 처리하여 효율성 증대
-  const [myPosts, totalPostCount] = await Promise.all([
-    db.memoryPost.findMany({
-      where: { writerId: user.id },
+  const [profile, stampCards, coupons, recentEntries, recentCommunityPosts, mySpaces] = await db.$transaction([
+    db.user.findUnique({
+      where: { id: user.id },
+      select: {
+        id: true,
+        name: true,
+        phoneNumber: true,
+        role: true,
+        status: true,
+        createdAt: true,
+        agreedToTerms: true,
+        agreedToPrivacyPolicy: true,
+        agreedToMarketing: true,
+        _count: {
+          select: {
+            eventEntries: true,
+            communityPosts: true,
+            memorySpaces: true,
+            memoryPosts: true,
+            StampCard: true,
+          },
+        },
+      },
+    }),
+    db.stampCard.findMany({
+      where: { userId: user.id },
       orderBy: { createdAt: "desc" },
       include: {
-        space: { select: { id: true, title: true } }
+        entries: {
+          orderBy: { createdAt: "desc" },
+          include: {
+            event: {
+              select: { id: true, name: true },
+            },
+          },
+        },
+        coupon: true,
       },
-      skip: skip,      // 건너뛸 개수
-      take: pageSize,  // 가져올 개수
     }),
-    db.memoryPost.count({ // 전체 글 개수 조회
-      where: { writerId: user.id }
-    })
+    db.coupon.findMany({
+      where: { stampCard: { userId: user.id } },
+      orderBy: { createdAt: "desc" },
+      include: {
+        stampCard: {
+          select: {
+            id: true,
+          },
+        },
+      },
+    }),
+    db.stampEntry.findMany({
+      where: { userId: user.id },
+      orderBy: { createdAt: "desc" },
+      take: 8,
+      include: {
+        event: {
+          select: { id: true, name: true },
+        },
+      },
+    }),
+    db.communityPost.findMany({
+      where: { userId: user.id },
+      orderBy: { createdAt: "desc" },
+      take: 8,
+      include: {
+        _count: {
+          select: { likes: true },
+        },
+      },
+    }),
+    db.memorySpace.findMany({
+      where: { userId: user.id },
+      orderBy: { createdAt: "desc" },
+      take: 6,
+      include: {
+        _count: {
+          select: { posts: true },
+        },
+      },
+    }),
   ]);
 
-  const totalPages = Math.ceil(totalPostCount / pageSize);
+  if (!profile) {
+    throw new Response("User not found", { status: 404 });
+  }
+
+  const activeStampCards = stampCards.filter((card) => !card.isRedeemed);
+  const redeemedStampCards = stampCards.filter((card) => card.isRedeemed);
+  const availableCoupons = coupons.filter((coupon) => !coupon.isUsed);
+  const usedCoupons = coupons.filter((coupon) => coupon.isUsed);
 
   return {
-    user,
+    profile,
+    stats: {
+      activeStampCards: activeStampCards.length,
+      totalStampCards: profile._count.StampCard,
+      totalStamps: stampCards.reduce((sum, card) => sum + card.entries.length, 0),
+      availableCoupons: availableCoupons.length,
+      usedCoupons: usedCoupons.length,
+      eventEntries: profile._count.eventEntries,
+      communityPosts: profile._count.communityPosts,
+      memorySpaces: profile._count.memorySpaces,
+      memoryPosts: profile._count.memoryPosts,
+    },
+    activeStampCards,
+    redeemedStampCards,
+    availableCoupons,
+    usedCoupons,
+    recentEntries,
+    recentCommunityPosts,
     mySpaces,
-    myPosts,
-    pagination: {
-      page,
-      totalPages,
-      totalPostCount
-    }
   };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { user, session } = await getSession(request);
-  if (!user || !session) {
+  const { user } = await getSession(request);
+  if (!user) {
     throw new Response("Unauthorized", { status: 401 });
   }
 
@@ -81,293 +142,350 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent");
   const flashSession = await getFlashSession(request.headers.get("Cookie"));
 
-  // --- 비밀번호 변경 로직 ---
-  if (intent === "updatePassword") {
-    const currentPassword = formData.get("currentPassword") as string;
-    const newPassword = formData.get("newPassword") as string;
-
-    if (!currentPassword || newPassword.length < 4) {
-      flashSession.flash("toast", { type: "error", message: "비밀번호는 4자리 이상이어야 합니다." });
+  if (intent === "updateProfile") {
+    const name = (formData.get("name") as string | null)?.trim() || "";
+    if (name.length < 2) {
+      flashSession.flash("toast", { type: "error", message: "이름은 2자 이상 입력해 주세요." });
       return redirect("/mypage", { headers: { "Set-Cookie": await commitSession(flashSession) } });
     }
 
-    const key = await db.key.findUnique({ where: { id: `password:${user.phoneNumber}` } });
-    if (!key || !key.hashedPassword) {
-      flashSession.flash("toast", { type: "error", message: "인증 정보를 찾을 수 없습니다." });
+    await db.user.update({
+      where: { id: user.id },
+      data: { name },
+    });
+
+    flashSession.flash("toast", { type: "success", message: "내 정보가 업데이트되었습니다." });
+    return redirect("/mypage", { headers: { "Set-Cookie": await commitSession(flashSession) } });
+  }
+
+  if (intent === "updatePassword") {
+    const currentPassword = (formData.get("currentPassword") as string | null) || "";
+    const newPassword = (formData.get("newPassword") as string | null) || "";
+    const confirmPassword = (formData.get("confirmPassword") as string | null) || "";
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      flashSession.flash("toast", { type: "error", message: "비밀번호 항목을 모두 입력해 주세요." });
+      return redirect("/mypage", { headers: { "Set-Cookie": await commitSession(flashSession) } });
+    }
+
+    if (!PASSWORD_RULE.test(newPassword)) {
+      flashSession.flash("toast", {
+        type: "error",
+        message: "새 비밀번호는 8자 이상, 영문/숫자를 포함해야 합니다.",
+      });
+      return redirect("/mypage", { headers: { "Set-Cookie": await commitSession(flashSession) } });
+    }
+
+    if (newPassword !== confirmPassword) {
+      flashSession.flash("toast", { type: "error", message: "새 비밀번호 확인이 일치하지 않습니다." });
+      return redirect("/mypage", { headers: { "Set-Cookie": await commitSession(flashSession) } });
+    }
+
+    const key = await db.key.findUnique({
+      where: { id: `password:${user.phoneNumber}` },
+      select: { id: true, hashedPassword: true },
+    });
+
+    if (!key?.hashedPassword) {
+      flashSession.flash("toast", { type: "error", message: "비밀번호 계정 정보를 찾을 수 없습니다." });
       return redirect("/mypage", { headers: { "Set-Cookie": await commitSession(flashSession) } });
     }
 
     const isValidPassword = verifyPassword(key.hashedPassword, currentPassword);
     if (!isValidPassword) {
-      flashSession.flash("toast", { type: "error", message: "현재 비밀번호가 일치하지 않습니다." });
+      flashSession.flash("toast", { type: "error", message: "현재 비밀번호가 올바르지 않습니다." });
       return redirect("/mypage", { headers: { "Set-Cookie": await commitSession(flashSession) } });
     }
 
-    const newHashedPassword = hashPassword(newPassword);
     await db.key.update({
       where: { id: key.id },
-      data: { hashedPassword: newHashedPassword },
+      data: { hashedPassword: hashPassword(newPassword) },
     });
 
-    flashSession.flash("toast", { type: "success", message: "비밀번호가 성공적으로 변경되었습니다." });
+    flashSession.flash("toast", { type: "success", message: "비밀번호가 변경되었습니다." });
     return redirect("/mypage", { headers: { "Set-Cookie": await commitSession(flashSession) } });
   }
 
   throw new Response("Invalid intent", { status: 400 });
 };
 
-// --- Zod 스키마 정의 ---
-const passwordFormSchema = z.object({
-  currentPassword: z.string().min(1, { message: "현재 비밀번호를 입력해주세요." }),
-  newPassword: z.string().min(4, { message: "새 비밀번호는 4자리 이상이어야 합니다." }),
-}).refine(data => data.currentPassword !== data.newPassword, {
-  message: "새 비밀번호는 현재 비밀번호와 달라야 합니다.",
-  path: ["newPassword"],
-});
-
-// --- UI 컴포넌트 ---
 export default function MyPage() {
-  const { user, mySpaces, myPosts, pagination } = useLoaderData<typeof loader>();
-  const passwordFetcher = useFetcher();
-  const [searchParams] = useSearchParams(); // 탭 유지 등을 위해 사용 가능
-
-  const passwordForm = useForm<z.infer<typeof passwordFormSchema>>({
-    resolver: zodResolver(passwordFormSchema),
-    defaultValues: { currentPassword: "", newPassword: "" },
-  });
-
-  // 페이지네이션 헬퍼 함수
-  const getPageNumbers = () => {
-    const pages = [];
-    // 간단하게 전체 페이지를 보여주거나, 로직을 추가해 1 2 3 ... 10 처럼 만들 수 있습니다.
-    // 여기서는 최대 5개 페이지만 표시하는 간단한 로직을 적용합니다.
-    let start = Math.max(1, pagination.page - 2);
-    let end = Math.min(pagination.totalPages, start + 4);
-    if (end - start < 4) {
-      start = Math.max(1, end - 4);
-    }
-
-    for (let i = start; i <= end; i++) {
-      pages.push(i);
-    }
-    return pages;
-  };
+  const {
+    profile,
+    stats,
+    activeStampCards,
+    redeemedStampCards,
+    availableCoupons,
+    usedCoupons,
+    recentEntries,
+    recentCommunityPosts,
+    mySpaces,
+  } = useLoaderData<typeof loader>();
+  const navigation = useNavigation();
+  const isSubmitting = navigation.state === "submitting";
 
   return (
-    <div className="space-y-8 max-w-4xl mx-auto pb-20">
-
-      {/* 1. 프로필 정보 (가로 배치) */}
-      <Card className="bg-slate-50 border-slate-200">
-        <CardContent className="pt-6">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <div className="flex items-center gap-4">
-              <div className="h-16 w-16 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600">
-                <User className="h-8 w-8" />
-              </div>
-              <div>
-                <h2 className="text-xl font-bold text-slate-900">{user.name}님</h2>
-                <p className="text-sm text-slate-500">{user.phoneNumber}</p>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              {/* 로그아웃 버튼 등을 여기에 추가 가능 */}
-            </div>
+    <div className="mx-auto max-w-4xl space-y-4 p-4 pb-24">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-2xl">내정보 보기</CardTitle>
+          <CardDescription>내 정보, 스탬프/쿠폰, 활동 내역을 한 번에 확인할 수 있습니다.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge>{profile.role || "USER"}</Badge>
+            <Badge variant={profile.status === "ACTIVE" ? "default" : "secondary"}>{profile.status}</Badge>
+            <Badge variant="outline">가입일 {new Date(profile.createdAt).toLocaleDateString()}</Badge>
+          </div>
+          <div className="flex gap-2">
+            <Button asChild size="sm" variant="outline">
+              <Link to="/card">스탬프카드 상세 보기</Link>
+            </Button>
+          </div>
+          <div className="rounded-md border p-3 text-sm">
+            <p>
+              <span className="font-semibold">이름:</span> {profile.name}
+            </p>
+            <p>
+              <span className="font-semibold">전화번호:</span> {profile.phoneNumber}
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <StatItem label="진행중 스탬프카드" value={stats.activeStampCards} />
+            <StatItem label="보유 쿠폰" value={stats.availableCoupons} />
+            <StatItem label="이벤트 참여" value={stats.eventEntries} />
+            <StatItem label="커뮤니티 글" value={stats.communityPosts} />
           </div>
         </CardContent>
       </Card>
 
-      {/* 2. 탭 메뉴 (내 활동 / 계정 설정) */}
-      <Tabs defaultValue="activity" className="w-full">
-        <TabsList className="grid w-full grid-cols-2 mb-4">
-          <TabsTrigger value="activity">내 활동 (우주 & 기록)</TabsTrigger>
-          <TabsTrigger value="settings">계정 설정</TabsTrigger>
+      <Tabs defaultValue="overview" className="w-full">
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="overview">내정보</TabsTrigger>
+          <TabsTrigger value="stampCoupon">스탬프/쿠폰</TabsTrigger>
+          <TabsTrigger value="settings">정보수정</TabsTrigger>
         </TabsList>
 
-        {/* 탭 1: 내 활동 내용 */}
-        <TabsContent value="activity" className="space-y-6">
-
-          {/* 🪐 내가 만든 우주 */}
+        <TabsContent value="overview" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <LayoutGrid className="h-5 w-5 text-indigo-500" />
-                나의 우주 <span className="text-sm text-slate-400 font-normal">({mySpaces.length})</span>
-              </CardTitle>
-              <CardDescription>직접 생성한 기념일 방 목록입니다.</CardDescription>
+              <CardTitle className="text-lg">최근 이벤트 적립 내역</CardTitle>
             </CardHeader>
-            <CardContent>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {mySpaces.map(space => (
-                  <div key={space.id} className="border rounded-xl p-4 hover:bg-slate-50 transition flex flex-col justify-between gap-4">
-                    <div>
-                      <h3 className="font-bold text-slate-800 truncate">{space.title}</h3>
-                      <p className="text-xs text-slate-500 mt-1">
-                        오픈일: {new Date(space.targetDate).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100">
-                      <div className="flex gap-2">
-                        <Link to={`/space/${space.id}`} className="text-xs bg-white border border-slate-200 px-2 py-1.5 rounded-md font-bold hover:bg-slate-100 flex items-center gap-1">
-                          <ExternalLink className="w-3 h-3" /> 입장
-                        </Link>
-                      </div>
-                    </div>
+            <CardContent className="space-y-2">
+              {recentEntries.length === 0 ? (
+                <p className="text-sm text-muted-foreground">적립 내역이 없습니다.</p>
+              ) : (
+                recentEntries.map((entry) => (
+                  <div key={entry.id} className="rounded-md border p-2 text-sm">
+                    <p className="font-medium">{entry.event ? entry.event.name : "관리자 수동 적립"}</p>
+                    <p className="text-xs text-muted-foreground">{new Date(entry.createdAt).toLocaleString()}</p>
                   </div>
-                ))}
-                {mySpaces.length === 0 && (
-                  <div className="col-span-full text-center py-6 text-slate-400">
-                    생성한 우주가 없습니다.
-                  </div>
-                )}
-              </div>
-
+                ))
+              )}
             </CardContent>
           </Card>
 
-          {/* ✍️ 내가 쓴 글 (페이징 적용) */}
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <MessageSquare className="h-5 w-5 text-pink-500" />
-                내가 남긴 기록 <span className="text-sm text-slate-400 font-normal">({pagination.totalPostCount})</span>
-              </CardTitle>
-              <CardDescription>다른 우주에 남긴 축하 메시지들입니다.</CardDescription>
+              <CardTitle className="text-lg">최근 커뮤니티 작성 글</CardTitle>
             </CardHeader>
-            <CardContent>
-              {myPosts.length === 0 ? (
-                <div className="text-center py-8 text-slate-400 border border-dashed rounded-lg">
-                  <p>아직 작성한 기록이 없습니다.</p>
-                </div>
+            <CardContent className="space-y-2">
+              {recentCommunityPosts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">작성한 커뮤니티 글이 없습니다.</p>
               ) : (
-                <div className="space-y-3">
-                  {myPosts.map(post => (
-                    <Link
-                      key={post.id}
-                      to={`/space/${post.spaceId}`} // 해당 우주로 이동
-                      className="block border rounded-xl p-4 hover:border-pink-200 hover:bg-pink-50/30 transition"
-                    >
-                      <div className="flex justify-between items-start mb-2">
-                        <Badge variant="outline" className="text-[10px] bg-slate-50">
-                          {post.space.title}
-                        </Badge>
-                        <span className="text-xs text-slate-400">
-                          {new Date(post.createdAt).toLocaleDateString()}
-                        </span>
-                      </div>
-                      <p className="text-sm text-slate-700 line-clamp-2">
-                        {post.content}
-                      </p>
-                      {post.mediaUrl && (
-                        <div className="mt-2 text-xs text-pink-500 font-bold flex items-center gap-1">
-                          📷 사진 포함됨
-                        </div>
-                      )}
-                    </Link>
-                  ))}
-                </div>
-              )}
-
-              {/* ✨ 페이지네이션 컨트롤 (글이 있을 때만 표시) */}
-              {pagination.totalPostCount > 0 && (
-                <div className="flex items-center justify-center gap-2 mt-6">
-                  {/* 이전 페이지 버튼 */}
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    asChild
-                    disabled={pagination.page <= 1}
-                    className={pagination.page <= 1 ? "pointer-events-none opacity-50" : ""}
+                recentCommunityPosts.map((post) => (
+                  <Link
+                    key={post.id}
+                    to={`/community/${post.id}`}
+                    className="block rounded-md border p-2 transition hover:bg-muted/40"
                   >
-                    <Link to={`?page=${pagination.page - 1}`} preventScrollReset>
-                      <ChevronLeft className="h-4 w-4" />
-                    </Link>
-                  </Button>
-
-                  {/* 페이지 번호들 */}
-                  {getPageNumbers().map((pageNum) => (
-                    <Button
-                      key={pageNum}
-                      variant={pageNum === pagination.page ? "default" : "outline"}
-                      size="sm"
-                      asChild
-                      className={pageNum === pagination.page ? "bg-pink-500 hover:bg-pink-600" : ""}
-                    >
-                      <Link to={`?page=${pageNum}`} preventScrollReset>
-                        {pageNum}
-                      </Link>
-                    </Button>
-                  ))}
-
-                  {/* 다음 페이지 버튼 */}
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    asChild
-                    disabled={pagination.page >= pagination.totalPages}
-                    className={pagination.page >= pagination.totalPages ? "pointer-events-none opacity-50" : ""}
-                  >
-                    <Link to={`?page=${pagination.page + 1}`} preventScrollReset>
-                      <ChevronRight className="h-4 w-4" />
-                    </Link>
-                  </Button>
-                </div>
+                    <p className="font-medium line-clamp-1">{post.title}</p>
+                    <p className="text-xs text-muted-foreground">
+                      좋아요 {post._count.likes} · {new Date(post.createdAt).toLocaleDateString()}
+                    </p>
+                  </Link>
+                ))
               )}
+            </CardContent>
+          </Card>
 
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">내가 만든 공간</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {mySpaces.length === 0 ? (
+                <p className="text-sm text-muted-foreground">생성한 공간이 없습니다.</p>
+              ) : (
+                mySpaces.map((space) => (
+                  <Link
+                    key={space.id}
+                    to={`/space/${space.id}`}
+                    className="flex items-center justify-between rounded-md border p-2 text-sm transition hover:bg-muted/40"
+                  >
+                    <span className="font-medium line-clamp-1">{space.title}</span>
+                    <span className="text-xs text-muted-foreground">게시글 {space._count.posts}</span>
+                  </Link>
+                ))
+              )}
             </CardContent>
           </Card>
         </TabsContent>
 
-
-        {/* 탭 2: 계정 설정 (비밀번호 변경) */}
-        <TabsContent value="settings">
+        <TabsContent value="stampCoupon" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2"><KeyRound className="h-5 w-5" /> 비밀번호 변경</CardTitle>
-              <CardDescription>새로운 비밀번호를 설정합니다.</CardDescription>
+              <CardTitle className="text-lg">스탬프 카드</CardTitle>
+              <CardDescription>
+                전체 {stats.totalStampCards}장 · 누적 스탬프 {stats.totalStamps}개
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <p className="text-sm font-semibold">진행중 ({activeStampCards.length})</p>
+                {activeStampCards.length === 0 ? (
+                  <p className="rounded-md border p-2 text-sm text-muted-foreground">진행중 카드가 없습니다.</p>
+                ) : (
+                  activeStampCards.map((card) => (
+                    <div key={card.id} className="rounded-md border p-2 text-sm">
+                      <p className="font-medium">카드 #{card.id}</p>
+                      <p className="text-xs text-muted-foreground">스탬프 {card.entries.length} / 10</p>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-semibold">완료 ({redeemedStampCards.length})</p>
+                {redeemedStampCards.length === 0 ? (
+                  <p className="rounded-md border p-2 text-sm text-muted-foreground">완료된 카드가 없습니다.</p>
+                ) : (
+                  redeemedStampCards.map((card) => (
+                    <div key={card.id} className="rounded-md border p-2 text-sm">
+                      <p className="font-medium">카드 #{card.id}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {card.coupon ? `쿠폰: ${card.coupon.code}` : "쿠폰 없음"}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">쿠폰</CardTitle>
+              <CardDescription>
+                보유 {stats.availableCoupons}개 · 사용 {stats.usedCoupons}개
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <p className="text-sm font-semibold">보유 쿠폰</p>
+                {availableCoupons.length === 0 ? (
+                  <p className="rounded-md border p-2 text-sm text-muted-foreground">보유 쿠폰이 없습니다.</p>
+                ) : (
+                  availableCoupons.map((coupon) => (
+                    <div key={coupon.id} className="rounded-md border p-2 text-sm">
+                      <p className="font-medium">{coupon.description}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {coupon.code} · 만료 {new Date(coupon.expiresAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-semibold">사용 쿠폰</p>
+                {usedCoupons.length === 0 ? (
+                  <p className="rounded-md border p-2 text-sm text-muted-foreground">사용 쿠폰이 없습니다.</p>
+                ) : (
+                  usedCoupons.map((coupon) => (
+                    <div key={coupon.id} className="rounded-md border p-2 text-sm">
+                      <p className="font-medium">{coupon.description}</p>
+                      <p className="text-xs text-muted-foreground">{coupon.code}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="settings" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">기본 정보 수정</CardTitle>
+              <CardDescription>이름을 변경할 수 있습니다.</CardDescription>
             </CardHeader>
             <CardContent>
-              <Form {...passwordForm}>
-                <passwordFetcher.Form method="post" className="space-y-4" onSubmit={passwordForm.handleSubmit(data => {
-                  passwordFetcher.submit({ ...data, intent: 'updatePassword' }, { method: 'post' });
-                  passwordForm.reset();
-                })}>
-                  <FormField
-                    control={passwordForm.control}
-                    name="currentPassword"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>현재 비밀번호</FormLabel>
-                        <FormControl>
-                          <Input type="password" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={passwordForm.control}
-                    name="newPassword"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>새 비밀번호</FormLabel>
-                        <FormControl>
-                          <Input type="password" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <Button type="submit" disabled={passwordFetcher.state !== 'idle'}>
-                    {passwordFetcher.state !== 'idle' ? "변경 중..." : "비밀번호 변경"}
-                  </Button>
-                </passwordFetcher.Form>
-              </Form>
+              <form method="post" className="space-y-3">
+                <input type="hidden" name="intent" value="updateProfile" />
+                <div className="space-y-1">
+                  <Label htmlFor="name">이름</Label>
+                  <Input id="name" name="name" defaultValue={profile.name} minLength={2} required />
+                </div>
+                <Button type="submit" disabled={isSubmitting}>
+                  저장
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">비밀번호 변경</CardTitle>
+              <CardDescription>영문/숫자를 포함해 8자 이상으로 설정하세요.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form method="post" className="space-y-3">
+                <input type="hidden" name="intent" value="updatePassword" />
+                <div className="space-y-1">
+                  <Label htmlFor="currentPassword">현재 비밀번호</Label>
+                  <Input id="currentPassword" name="currentPassword" type="password" required />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="newPassword">새 비밀번호</Label>
+                  <Input id="newPassword" name="newPassword" type="password" required />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="confirmPassword">새 비밀번호 확인</Label>
+                  <Input id="confirmPassword" name="confirmPassword" type="password" required />
+                </div>
+                <Button type="submit" disabled={isSubmitting}>
+                  변경
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">추천 설정</CardTitle>
+              <CardDescription>운영 편의와 보안을 위해 함께 관리하면 좋은 항목입니다.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <p>1. 비밀번호는 3개월 단위로 주기적으로 변경하기</p>
+              <p>2. 계정 공유 금지 및 공동기기 사용 후 로그아웃하기</p>
+              <p>3. 약관/개인정보/마케팅 동의 상태 주기적으로 점검하기</p>
+              <div className="rounded-md border p-2">
+                <p>약관 동의: {profile.agreedToTerms ? "동의" : "미동의"}</p>
+                <p>개인정보 동의: {profile.agreedToPrivacyPolicy ? "동의" : "미동의"}</p>
+                <p>마케팅 동의: {profile.agreedToMarketing ? "동의" : "미동의"}</p>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
 
+function StatItem({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md border p-2 text-center">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-lg font-semibold">{value}</p>
     </div>
   );
 }

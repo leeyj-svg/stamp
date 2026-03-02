@@ -9,6 +9,8 @@ import { Input } from "~/components/ui/input";
 import { db } from "~/lib/db.server";
 import { commitSession, getFlashSession } from "~/lib/session.server";
 import { sendAlimtalk, AlimtalkType } from "~/lib/alimtalk.server";
+
+const PASSWORD_RESET_CODE_TTL_MS = 10 * 60 * 1000;
 // 서버 로직 (Action)
 export const action = async ({ request }: ActionFunctionArgs) => {
   const formData = await request.formData();
@@ -31,6 +33,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }); // 개발용으로 콘솔에 출력
 
   flashSession.set("verificationCode", verificationCode);
+  flashSession.set("passwordResetCodeIssuedAt", Date.now());
+  flashSession.set("passwordResetCodeExpiresAt", Date.now() + PASSWORD_RESET_CODE_TTL_MS);
+  flashSession.unset("isVerifiedForPasswordReset");
+  flashSession.unset("passwordResetVerifiedAt");
   flashSession.set("passwordResetUserId", user.id); // 비밀번호를 변경할 사용자 ID 저장
   
   return redirect("/forgot-password/verify", {

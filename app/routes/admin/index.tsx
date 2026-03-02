@@ -1,211 +1,118 @@
-// app/routes/admin/index.tsx (최근 쿠폰 내역 추가)
-
-import { type LoaderFunctionArgs, Link } from "react-router";
+﻿import { Link, type LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
-import { db } from "~/lib/db.server";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
+
+import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "~/components/ui/table";
-import { Users, Package, Ticket } from "lucide-react";
-import { format } from "date-fns";
+import { getScopedCategoryWhere, requireAdminAccessScope } from "~/lib/admin-access.server";
+import { db } from "~/lib/db.server";
 
-
-// --- Loader: 대시보드에 필요한 모든 데이터를 불러옵니다. ---
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const [
-    totalUsers,
-    totalEvents,
-    totalCoupons,
-    rawRecentUsers,
-    rawRecentEvents,
-    rawRecentCoupons, // 👈 최근 쿠폰 데이터 추가
-  ] = await Promise.all([
-    db.user.count(),
-    db.event.count(),
-    db.coupon.count(),
-    db.user.findMany({
-      take: 5,
-      orderBy: { createdAt: 'desc' },
-      select: { id: true, name: true, createdAt: true },
-    }),
+  const scope = await requireAdminAccessScope(request);
+  const scopedCategoryWhere = getScopedCategoryWhere(scope) as { categoryId?: { in: number[] } };
+
+  const [totalEvents, recentEvents, totalUsers, totalCoupons] = await Promise.all([
+    db.event.count({ where: scopedCategoryWhere }),
     db.event.findMany({
-      take: 5,
-      orderBy: { createdAt: 'desc' },
-      select: { id: true, name: true, createdAt: true },
+      where: scopedCategoryWhere,
+      take: 8,
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        name: true,
+        createdAt: true,
+        category: { select: { name: true } },
+      },
     }),
-    // 👇 최근 발급된 쿠폰 5개를 가져오는 쿼리 추가
-    db.coupon.findMany({
-        take: 5,
-        orderBy: { createdAt: 'desc'},
-        select: {
-            id: true,
-            code: true,
-            createdAt: true,
-            stampCard: {
-                select: {
-                    user: {
-                        select: { id: true, name: true }
-                    }
-                }
-            }
-        }
-    })
+    scope.isAdmin ? db.user.count() : Promise.resolve(null),
+    scope.isAdmin ? db.coupon.count() : Promise.resolve(null),
   ]);
- const recentUsers = rawRecentUsers.map(user => ({ ...user, createdAt: format(new Date(user.createdAt), "yy.MM.dd") }));
-  const recentEvents = rawRecentEvents.map(event => ({ ...event, createdAt: format(new Date(event.createdAt), "yy.MM.dd") }));
-  const recentCoupons = rawRecentCoupons.map(coupon => ({ ...coupon, createdAt: format(new Date(coupon.createdAt), "yy.MM.dd") }));
+
   return {
-    totalUsers,
+    isAdmin: scope.isAdmin,
     totalEvents,
+    totalUsers,
     totalCoupons,
-    recentUsers,
     recentEvents,
-    recentCoupons, // 👈 반환 객체에 추가
   };
 };
 
-// --- UI 컴포넌트 ---
 export default function AdminDashboard() {
-  const { 
-    totalUsers, 
-    totalEvents, 
-    totalCoupons, 
-    recentUsers, 
-    recentEvents,
-    recentCoupons, // 👈 loader 데이터 사용
-  } = useLoaderData<typeof loader>();
+  const { isAdmin, totalEvents, totalUsers, totalCoupons, recentEvents } = useLoaderData<typeof loader>();
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">대시보드</h1>
         <p className="text-muted-foreground">
-          서비스의 전체 현황을 요약해서 보여줍니다.
+          {isAdmin ? "전체 서비스" : "담당 카테고리"} 기준 운영 현황입니다.
         </p>
       </div>
 
-      {/* 1. 핵심 지표 카드 (변경 없음) */}
-      <div className="grid gap-4">
+      <div className="grid gap-4 md:grid-cols-3">
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">총 사용자</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{totalUsers}</div>
-            <p className="text-xs text-muted-foreground">현재까지 가입한 총 사용자 수</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardHeader>
             <CardTitle className="text-sm font-medium">총 이벤트</CardTitle>
-            <Package className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{totalEvents}</div>
-            <p className="text-xs text-muted-foreground">지금까지 생성된 총 이벤트 수</p>
           </CardContent>
         </Card>
+
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">발급된 쿠폰</CardTitle>
-            <Ticket className="h-4 w-4 text-muted-foreground" />
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">총 사용자</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{totalCoupons}</div>
-            <p className="text-xs text-muted-foreground">지금까지 발급된 총 쿠폰 수</p>
+            <div className="text-2xl font-bold">{totalUsers ?? "-"}</div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">총 쿠폰</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{totalCoupons ?? "-"}</div>
           </CardContent>
         </Card>
       </div>
 
-      {/* 2. 최근 활동 목록 (레이아웃 수정 및 쿠폰 카드 추가) */}
-      <div className="grid gap-4">
-        {/* 최근 가입 사용자 */}
-        <Card className="lg:col-span-1">
-          <CardHeader>
-            <CardTitle>최근 가입한 사용자</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>이름</TableHead>
-                  <TableHead className="text-right">가입일</TableHead>
+      <Card>
+        <CardHeader>
+          <CardTitle>최근 이벤트</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>이벤트</TableHead>
+                <TableHead>카테고리</TableHead>
+                <TableHead className="text-right">생성일</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {recentEvents.map((event) => (
+                <TableRow key={event.id}>
+                  <TableCell>
+                    <Link to={`/admin/events/${event.id}`} className="hover:underline font-medium">
+                      {event.name}
+                    </Link>
+                  </TableCell>
+                  <TableCell>{event.category.name}</TableCell>
+                  <TableCell className="text-right">{new Date(event.createdAt).toLocaleDateString()}</TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {recentUsers.map(user => (
-                  <TableRow key={user.id}>
-                    <TableCell>
-                      <Link to={`/admin/users/${user.id}`} className="font-medium hover:underline">
-                        {user.name}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="text-right">{user.createdAt}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-        
-        {/* 최근 등록된 이벤트 */}
-        <Card className="col-span-1">
-          <CardHeader>
-            <CardTitle>최근 등록된 이벤트</CardTitle>
-          </CardHeader>
-          <CardContent>
-             <Table>
-              <TableHeader>
+              ))}
+              {recentEvents.length === 0 && (
                 <TableRow>
-                  <TableHead>이벤트명</TableHead>
-                  <TableHead className="text-right">등록일</TableHead>
+                  <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
+                    이벤트 데이터가 없습니다.
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {recentEvents.map(event => (
-                  <TableRow key={event.id}>
-                    <TableCell>
-                      <Link to={`/admin/events/${event.id}`} className="font-medium hover:underline">
-                        {event.name}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="text-right">{event.createdAt}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-
-        {/* 👇 최근 발급된 쿠폰 카드 (신규 추가) */}
-        <Card className="col-span-1">
-          <CardHeader>
-            <CardTitle>최근 발급된 쿠폰</CardTitle>
-          </CardHeader>
-          <CardContent>
-             <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>사용자</TableHead>
-                  <TableHead className="text-right">발급일</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {recentCoupons.map(coupon => (
-                  <TableRow key={coupon.id}>
-                    <TableCell>
-                      <Link to={`/admin/users/${coupon.stampCard.user.id}`} className="font-medium hover:underline">
-                        {coupon.stampCard.user.name}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="text-right">{coupon.createdAt}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      </div>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </div>
   );
 }
