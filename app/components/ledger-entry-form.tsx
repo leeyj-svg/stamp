@@ -337,6 +337,11 @@ export function LedgerEntryForm({
     setIsCalculatorDialogOpen(true);
   };
 
+  const openAmountPad = () => {
+    setIsAmountPadOpen(true);
+    setAmountError("");
+  };
+
   const closeAmountPad = () => {
     setIsAmountPadOpen(false);
   };
@@ -415,8 +420,8 @@ export function LedgerEntryForm({
               </Link>
             </Button>
             <div>
-              <p className="text-[0.68rem] text-slate-500">{mode === "edit" ? "가계부 수정" : "가계부 작성"}</p>
-              <h1 className="text-sm font-semibold text-slate-900">{dateLabel}</h1>
+              <p className="text-[0.62rem] text-slate-500">{mode === "edit" ? "가계부 수정" : "가계부 작성"}</p>
+              <h1 className="text-[0.82rem] font-semibold text-slate-900">{dateLabel}</h1>
             </div>
           </div>
         </div>
@@ -438,14 +443,14 @@ export function LedgerEntryForm({
           <input type="hidden" name="usedAt" value={dateToken} />
           {entryId ? <input type="hidden" name="entryId" value={entryId} /> : null}
 
-          <div className="grid grid-cols-3 gap-2 border-b px-4 py-4">
+          <div className="grid grid-cols-3 gap-2 border-b px-4 py-3">
             {ENTRY_TYPES.map((type) => (
               <button
                 key={type}
                 type="button"
                 onClick={() => setEntryType(type)}
                 className={cn(
-                  "rounded-2xl border bg-white px-3 py-3 text-xs font-semibold transition-colors",
+                  "rounded-2xl border bg-white px-3 py-2.5 text-[11px] font-semibold transition-colors",
                   entryType === type
                     ? getEntryTypeTone(type).active
                     : "border-slate-200 text-slate-700",
@@ -458,19 +463,32 @@ export function LedgerEntryForm({
 
           <input type="hidden" name="type" value={entryType} />
 
-          <div className="border-b px-6 py-2.5">
+          <div className="border-b px-6 py-2">
             <input type="hidden" id="amount" name="amount" value={amountValue} />
             <div className="flex items-center gap-3">
-              <span className="w-20 shrink-0 text-sm text-slate-400">금액</span>
+              <span className="w-20 shrink-0 text-xs text-slate-400">금액</span>
               <div className="relative min-w-0 flex-1">
-                <div
+                <button
+                  type="button"
+                  onClick={openAmountPad}
                   className={cn(
-                    "flex h-7 items-center px-0 py-0 text-xs font-normal tabular-nums md:text-xs",
+                    "flex h-7 w-full items-center px-0 py-0 text-left text-[11px] font-normal tabular-nums md:text-[11px]",
                     isAmountPadOpen ? tone.accent : numericAmount > 0 ? "text-slate-900" : "text-slate-400",
                   )}
+                  aria-label="금액 입력 열기"
                 >
-                  {formatAmountDisplay(amountValue)}
-                </div>
+                  {amountValue ? (
+                    formatAmountDisplay(amountValue)
+                  ) : (
+                    <span
+                      className={cn(
+                        "inline-block h-4 w-px rounded-full bg-current",
+                        isAmountPadOpen ? "animate-pulse" : "opacity-60",
+                      )}
+                      aria-hidden="true"
+                    />
+                  )}
+                </button>
 
               </div>
             </div>
@@ -479,20 +497,25 @@ export function LedgerEntryForm({
             ) : null}
           </div>
 
-          <div className="border-b px-6 py-2.5">
+          <div className="border-b px-6 py-2">
             <div className="flex items-center gap-3">
-              <span className="w-20 shrink-0 text-sm text-slate-400">카테고리</span>
+              <span className="w-20 shrink-0 text-xs text-slate-400">카테고리</span>
               <div className="min-w-0 flex-1">
                 <input type="hidden" id="categoryId" name="categoryId" value={selectedCategoryId} />
                 <Select
                   value={selectedCategoryId || undefined}
                   onValueChange={(value) => setSelectedCategoryId(value === NO_CATEGORY_VALUE ? "" : value)}
+                  onOpenChange={(open) => {
+                    if (open) {
+                      closeAmountPad();
+                    }
+                  }}
                 >
-                  <SelectTrigger className="h-8 rounded-none border-0 bg-transparent px-0 text-sm text-slate-900 shadow-none focus:ring-0 focus:ring-offset-0 md:text-xs [&>svg]:text-slate-400 [&>svg]:opacity-100">
+                  <SelectTrigger className="h-8 rounded-none border-0 bg-transparent px-0 text-xs text-slate-900 shadow-none focus:ring-0 focus:ring-offset-0 md:text-xs [&>svg]:text-slate-400 [&>svg]:opacity-100">
                     <SelectValue placeholder="" />
                   </SelectTrigger>
                   <SelectContent className="rounded-xl border-slate-200 bg-white shadow-lg">
-                    <SelectItem value={NO_CATEGORY_VALUE}>카테고리 없음</SelectItem>
+
                     {visibleCategories.map((category) => (
                       <SelectItem key={category.id} value={String(category.id)}>
                         {category.name}
@@ -515,15 +538,16 @@ export function LedgerEntryForm({
             </div>
           </div>
 
-          <div className="border-b px-6 py-2.5">
+          <div className="border-b px-6 py-2">
             <div className="flex items-center gap-3">
-              <Label htmlFor="memo" className="w-20 shrink-0 text-sm text-slate-400">메모</Label>
+              <Label htmlFor="memo" className="w-20 shrink-0 text-xs text-slate-400">메모</Label>
               <div className="min-w-0 flex-1">
                 <Input
                   id="memo"
                   name="memo"
                   defaultValue={defaultValues.memo}
-                  className="h-8 border-0 px-0 py-0 text-sm text-slate-900 shadow-none focus-visible:ring-0"
+                  className="h-8 border-0 px-0 py-0 text-xs text-slate-900 shadow-none focus-visible:ring-0"
+                  onFocus={closeAmountPad}
                 />
               </div>
             </div>
@@ -532,9 +556,9 @@ export function LedgerEntryForm({
           <div>
             {entryType === "EXPENSE" ? (
               <>
-                <div className="border-b px-6 py-2.5">
+                <div className="border-b px-6 py-2">
                   <div className="flex items-center gap-3">
-                    <Label htmlFor="paymentMethod" className="w-20 shrink-0 text-sm text-slate-400">결제</Label>
+                    <Label htmlFor="paymentMethod" className="w-20 shrink-0 text-xs text-slate-400">결제</Label>
                     <div className="min-w-0 flex-1">
                       <input type="hidden" id="paymentMethod" name="paymentMethod" value={paymentMethodValue} />
                       <Select
@@ -542,8 +566,13 @@ export function LedgerEntryForm({
                         onValueChange={(value) =>
                           setPaymentMethodValue(value === NO_PAYMENT_METHOD_VALUE ? "" : (value as LedgerPaymentMethodValue))
                         }
+                        onOpenChange={(open) => {
+                          if (open) {
+                            closeAmountPad();
+                          }
+                        }}
                       >
-                        <SelectTrigger className="h-8 rounded-none border-0 bg-transparent px-0 text-sm text-slate-900 shadow-none focus:ring-0 focus:ring-offset-0 md:text-xs [&>svg]:text-slate-400 [&>svg]:opacity-100">
+                        <SelectTrigger className="h-8 rounded-none border-0 bg-transparent px-0 text-xs text-slate-900 shadow-none focus:ring-0 focus:ring-offset-0 md:text-xs [&>svg]:text-slate-400 [&>svg]:opacity-100">
                           <SelectValue placeholder="" />
                         </SelectTrigger>
                         <SelectContent className="rounded-xl border-slate-200 bg-white shadow-lg">
@@ -559,30 +588,32 @@ export function LedgerEntryForm({
                     </div>
                   </div>
                 </div>
-                <div className="border-b px-6 py-2.5">
+                <div className="border-b px-6 py-2">
                   <div className="flex items-center gap-3">
-                    <Label htmlFor="paymentSourceName" className="w-20 shrink-0 text-sm text-slate-400">수단명</Label>
+                    <Label htmlFor="paymentSourceName" className="w-20 shrink-0 text-xs text-slate-400">수단명</Label>
                     <div className="min-w-0 flex-1">
                       <Input
                         id="paymentSourceName"
                         name="paymentSourceName"
                         defaultValue={defaultValues.paymentSourceName}
-                        className="h-8 border-0 px-0 py-0 text-sm text-slate-900 shadow-none focus-visible:ring-0"
+                        className="h-8 border-0 px-0 py-0 text-xs text-slate-900 shadow-none focus-visible:ring-0"
+                        onFocus={closeAmountPad}
                       />
                     </div>
                   </div>
                 </div>
               </>
             ) : null}
-            <div className="border-b px-6 py-2.5">
+            <div className="border-b px-6 py-2">
               <div className="flex items-center gap-3">
-                <Label htmlFor="tagNames" className="w-20 shrink-0 text-sm text-slate-400">태그</Label>
+                <Label htmlFor="tagNames" className="w-20 shrink-0 text-xs text-slate-400">태그</Label>
                 <div className="min-w-0 flex-1">
                   <Input
                     id="tagNames"
                     name="tagNames"
                     defaultValue={defaultValues.tagNames}
-                    className="h-8 border-0 px-0 py-0 text-sm text-slate-900 shadow-none focus-visible:ring-0"
+                    className="h-8 border-0 px-0 py-0 text-xs text-slate-900 shadow-none focus-visible:ring-0"
+                    onFocus={closeAmountPad}
                   />
                 </div>
               </div>
@@ -704,7 +735,7 @@ export function LedgerEntryForm({
                   key={key}
                   type="button"
                   onClick={() => appendAmount(key)}
-                    className="h-20 border-r border-t border-slate-200 bg-white text-2xl font-light text-slate-800"
+                  className="h-20 border-r border-t border-slate-200 bg-white text-2xl font-light text-slate-800"
                 >
                   {key}
                 </button>

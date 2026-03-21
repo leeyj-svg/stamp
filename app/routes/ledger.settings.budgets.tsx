@@ -1,6 +1,6 @@
 ﻿import { Form, Link, redirect, useLoaderData, type ActionFunctionArgs, type LoaderFunctionArgs } from "react-router";
 import { useMemo, useState } from "react";
-import { ArrowLeft, Check, MoreVertical, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, ChevronDown, MoreVertical, Plus, Trash2 } from "lucide-react";
 
 import {
   LEDGER_BUDGET_TEMPLATE_LABEL,
@@ -188,8 +188,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const typeField = formData.get("type");
   const selectedType = parseSelectedType(
     (typeof selectedTypeField === "string" ? selectedTypeField : null) ??
-      (typeof typeField === "string" ? typeField : null) ??
-      new URL(request.url).searchParams.get("type"),
+    (typeof typeField === "string" ? typeField : null) ??
+    new URL(request.url).searchParams.get("type"),
   );
   const { period, categories } = await ensureLedgerBudgetTemplatePeriod(db, user.id);
   const intent = formData.get("intent");
@@ -352,6 +352,7 @@ export default function LedgerBudgetSettingsPage() {
   const [selectedBudgetType, setSelectedBudgetType] = useState<LedgerEntryTypeValue>(selectedType);
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [editingCategoryName, setEditingCategoryName] = useState("");
+  const [isCategoryAllocationOpen, setIsCategoryAllocationOpen] = useState(false);
 
   const allocationMap = useMemo(
     () =>
@@ -380,7 +381,7 @@ export default function LedgerBudgetSettingsPage() {
         const plan = plans.find((item) => item.type === type);
         return [type, (plan?.weekCarryMode ?? "NONE") as WeekCarryModeValue];
       }),
-      ) as Record<LedgerEntryTypeValue, WeekCarryModeValue>,
+    ) as Record<LedgerEntryTypeValue, WeekCarryModeValue>,
   );
   const [fixedFlags, setFixedFlags] = useState<Record<string, boolean>>(
     Object.fromEntries(
@@ -462,7 +463,7 @@ export default function LedgerBudgetSettingsPage() {
 
           <div className="min-w-0 flex-1 pt-2 pr-12 text-left">
             <h1 className="text-[1.05rem] font-semibold text-slate-900">기본 예산 상세 설정</h1>
-            <p className="text-xs text-slate-500">새 달 예산이 시작할 기본값을 여기에서 정해 둘 수 있어요.</p>
+
           </div>
 
           <div className="absolute right-0 top-0">
@@ -539,15 +540,15 @@ export default function LedgerBudgetSettingsPage() {
                   const isSelected = selectedBudgetType === type;
 
                   return (
-                      <button
-                        key={type}
-                        type="button"
-                        onClick={() => {
-                          setSelectedBudgetType(type);
-                          setEditingCategoryId(null);
-                          setEditingCategoryName("");
-                        }}
-                        className={cn(
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => {
+                        setSelectedBudgetType(type);
+                        setEditingCategoryId(null);
+                        setEditingCategoryName("");
+                      }}
+                      className={cn(
                         "rounded-2xl border px-3 py-2 text-xs font-medium transition-colors",
                         isSelected ? cn(accent.border, accent.bg, accent.text) : "border-slate-200 bg-white text-slate-600",
                       )}
@@ -628,19 +629,19 @@ export default function LedgerBudgetSettingsPage() {
                           </div>
                         </div>
 
-                        <div className="space-y-1.5">
+                        <div className="space-y-1">
                           {selectedCategoryAllocationRatios.map((allocation, index) => (
-                            <div key={allocation.id} className="flex items-center justify-between gap-3 text-xs">
+                            <div key={allocation.id} className="flex items-center justify-between gap-3 text-[10px]">
                               <div className="flex min-w-0 items-center gap-2">
                                 <span
-                                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                  className="h-2 w-2 shrink-0 rounded-full"
                                   style={{ backgroundColor: allocation.color ?? getAllocationSegmentColor(selectedBudgetType, index) }}
                                 />
-                                <span className="truncate text-slate-700">{allocation.name}</span>
+                                <span className="truncate text-[10px] text-slate-700">{allocation.name}</span>
                               </div>
                               <div className="shrink-0 text-right">
-                                <span className="font-semibold text-slate-900">{allocation.ratio}%</span>
-                                <span className="ml-2 text-[11px] text-slate-500">{formatLedgerAmount(allocation.amount)}</span>
+                                <span className="text-[10px] font-semibold text-slate-900">{allocation.ratio}%</span>
+                                <span className="ml-2 text-[10px] text-slate-500">{formatLedgerAmount(allocation.amount)}</span>
                               </div>
                             </div>
                           ))}
@@ -656,12 +657,23 @@ export default function LedgerBudgetSettingsPage() {
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <p className="text-xs font-semibold text-slate-900">카테고리별 배정</p>
-                  <p className="mt-0.5 text-[11px] text-slate-500">카테고리를 눌러 이름을 바꾸고, 오른쪽 휴지통으로 바로 삭제할 수 있어요.</p>
+
                 </div>
-                <span className="text-[11px] text-slate-400">{formatLedgerAmount(selectedAllocatedBudgetAmount)} 배정</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-slate-400">{formatLedgerAmount(selectedAllocatedBudgetAmount)} 배정</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsCategoryAllocationOpen((current) => !current)}
+                    className="rounded-full p-1 text-slate-400 transition-colors hover:bg-white hover:text-slate-600"
+                    aria-expanded={isCategoryAllocationOpen}
+                    aria-label={isCategoryAllocationOpen ? "카테고리 배정 접기" : "카테고리 배정 펼치기"}
+                  >
+                    <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", isCategoryAllocationOpen ? "rotate-180" : "")} />
+                  </button>
+                </div>
               </div>
 
-              {selectedCategories.length === 0 ? (
+              {isCategoryAllocationOpen ? selectedCategories.length === 0 ? (
                 <div className="mt-3 rounded-xl bg-white px-3 py-4 text-xs text-slate-500">배정할 카테고리가 아직 없습니다.</div>
               ) : (
                 <div className="mt-2 space-y-1.5">
@@ -682,92 +694,128 @@ export default function LedgerBudgetSettingsPage() {
                         />
                         <div className="min-w-0 flex-1">
                           {isEditing ? (
-                            <Form method="post" action={actionUrl} className="flex items-center gap-2">
-                              <input type="hidden" name="intent" value="update_category" />
-                              <input type="hidden" name="type" value={selectedBudgetType} />
-                              <input type="hidden" name="categoryId" value={category.id} />
-                              <input type="hidden" name="color" value={categoryColors[`${selectedBudgetType}:${category.id}`] ?? normalizeCategoryColor(category.color)} />
-                              <Input
-                                name="name"
-                                value={editingCategoryName}
-                                onChange={(event) => setEditingCategoryName(event.target.value)}
-                                className="h-8 min-w-0 flex-1 rounded-none border-0 bg-transparent px-0 text-[11px] font-medium shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                                autoFocus
-                              />
-                              <Button type="submit" variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-xl text-slate-500 hover:bg-white">
-                                <Check className="h-4 w-4" />
-                                <span className="sr-only">카테고리 수정</span>
-                              </Button>
-                            </Form>
+                            <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                              <Form method="post" action={actionUrl} className="flex min-w-0 flex-1 items-center">
+                                <input type="hidden" name="intent" value="update_category" />
+                                <input type="hidden" name="type" value={selectedBudgetType} />
+                                <input type="hidden" name="categoryId" value={category.id} />
+                                <input type="hidden" name="color" value={categoryColors[`${selectedBudgetType}:${category.id}`] ?? normalizeCategoryColor(category.color)} />
+                                <Input
+                                  name="name"
+                                  value={editingCategoryName}
+                                  onChange={(event) => setEditingCategoryName(event.target.value)}
+                                  onBlur={(event) => {
+                                    const nextName = event.currentTarget.value.trim();
+                                    if (!nextName || nextName === category.name) {
+                                      setEditingCategoryId(null);
+                                      setEditingCategoryName("");
+                                      return;
+                                    }
+                                    event.currentTarget.form?.requestSubmit();
+                                  }}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Escape") {
+                                      event.preventDefault();
+                                      setEditingCategoryId(null);
+                                      setEditingCategoryName("");
+                                    }
+                                  }}
+                                  className="h-8 min-w-0 flex-1 rounded-none border-0 bg-transparent px-0 pr-2 text-[11px] font-medium shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                                  autoFocus
+                                />
+                              </Form>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setFixedFlags((current) => ({
+                                    ...current,
+                                    [`${selectedBudgetType}:${category.id}`]: !current[`${selectedBudgetType}:${category.id}`],
+                                  }))
+                                }
+                                className={cn(
+                                  "h-4 shrink-0 rounded-full border px-1 text-[7px] font-medium leading-none transition-colors",
+                                  fixedFlags[`${selectedBudgetType}:${category.id}`]
+                                    ? "border-violet-200 bg-violet-50 text-violet-600"
+                                    : "border-slate-200 bg-white text-slate-500",
+                                )}
+                              >
+                                {fixedFlags[`${selectedBudgetType}:${category.id}`] ? "고정" : "변동"}
+                              </button>
+                            </div>
                           ) : (
-                            <button
-                              type="button"
-                              onClick={() => beginCategoryEdit(category.id, category.name)}
-                              className="flex w-full min-w-0 items-center gap-2 text-left"
-                            >
-                              <span className="truncate text-[11px] font-medium text-slate-700">{category.name}</span>
-                              {!category.isActive ? <span className="text-[11px] text-slate-400">숨김</span> : null}
-                            </button>
+                            <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+                              <button
+                                type="button"
+                                onClick={() => beginCategoryEdit(category.id, category.name)}
+                                className="min-w-0 max-w-full overflow-hidden text-left"
+                                title={category.name}
+                              >
+                                <span className="block truncate text-[11px] font-medium leading-[1.35] text-slate-700">{category.name}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setFixedFlags((current) => ({
+                                    ...current,
+                                    [`${selectedBudgetType}:${category.id}`]: !current[`${selectedBudgetType}:${category.id}`],
+                                  }))
+                                }
+                                className={cn(
+                                  "h-4 shrink-0 rounded-full border px-1 text-[7px] font-medium leading-none transition-colors",
+                                  fixedFlags[`${selectedBudgetType}:${category.id}`]
+                                    ? "border-violet-200 bg-violet-50 text-violet-600"
+                                    : "border-slate-200 bg-white text-slate-500",
+                                )}
+                              >
+                                {fixedFlags[`${selectedBudgetType}:${category.id}`] ? "고정" : "변동"}
+                              </button>
+                              {!category.isActive ? <span className="shrink-0 text-[11px] text-slate-400">숨김</span> : null}
+                            </div>
                           )}
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setFixedFlags((current) => ({
-                              ...current,
-                              [`${selectedBudgetType}:${category.id}`]: !current[`${selectedBudgetType}:${category.id}`],
-                            }))
-                          }
-                          className={cn(
-                            "ml-1 h-8 min-w-[3.9rem] shrink-0 rounded-xl border px-3 text-[10px] font-medium transition-colors",
-                            fixedFlags[`${selectedBudgetType}:${category.id}`]
-                              ? "border-violet-200 bg-violet-50 text-violet-600"
-                              : "border-slate-200 bg-white text-slate-500",
-                          )}
-                        >
-                          {fixedFlags[`${selectedBudgetType}:${category.id}`] ? "고정" : "변동"}
-                        </button>
+                        <div className="ml-3 flex shrink-0 items-center gap-2">
+                          <Input
+                            type="text"
+                            inputMode="numeric"
+                            value={budgetValues[`${selectedBudgetType}:${category.id}`] ?? ""}
+                            onChange={(event) =>
+                              setBudgetValues((current) => ({
+                                ...current,
+                                [`${selectedBudgetType}:${category.id}`]: formatBudgetInput(parseBudgetInput(event.target.value)),
+                              }))
+                            }
+                            placeholder="0"
+                            className="h-8 w-20 rounded-none border-0 bg-transparent px-0 text-right text-[13px] shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                          />
 
-                        <Input
-                          type="text"
-                          inputMode="numeric"
-                          value={budgetValues[`${selectedBudgetType}:${category.id}`] ?? ""}
-                          onChange={(event) =>
-                            setBudgetValues((current) => ({
-                              ...current,
-                              [`${selectedBudgetType}:${category.id}`]: formatBudgetInput(parseBudgetInput(event.target.value)),
-                            }))
-                          }
-                          placeholder="0"
-                          className="h-8 w-32 rounded-none border-0 bg-transparent px-0 text-right text-[13px] shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                        />
-
-                        <Form method="post" action={actionUrl}>
-                          <input type="hidden" name="intent" value="delete_category" />
-                          <input type="hidden" name="type" value={selectedBudgetType} />
-                          <input type="hidden" name="categoryId" value={category.id} />
-                          <Button
-                            type="submit"
-                            variant="ghost"
-                            size="icon"
-                            disabled={!canDelete}
-                            className="h-8 w-8 shrink-0 rounded-xl text-rose-500 hover:bg-white hover:text-rose-600 disabled:text-slate-300 disabled:hover:bg-transparent"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            <span className="sr-only">카테고리 삭제</span>
-                          </Button>
-                        </Form>
+                          <Form method="post" action={actionUrl}>
+                            <input type="hidden" name="intent" value="delete_category" />
+                            <input type="hidden" name="type" value={selectedBudgetType} />
+                            <input type="hidden" name="categoryId" value={category.id} />
+                            <Button
+                              type="submit"
+                              variant="ghost"
+                              size="icon"
+                              disabled={!canDelete}
+                              className="h-8 w-8 shrink-0 rounded-xl text-rose-500 hover:bg-white hover:text-rose-600 disabled:text-slate-300 disabled:hover:bg-transparent"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              <span className="sr-only">카테고리 삭제</span>
+                            </Button>
+                          </Form>
+                        </div>
                       </div>
                     );
                   })}
                 </div>
-              )}
+              ) : null}
 
-              <Form method="post" action={actionUrl} className="mt-2 flex items-center gap-3 border-t border-slate-200 pt-2">
-                <input type="hidden" name="intent" value="create_category" />
-                <input type="hidden" name="type" value={selectedBudgetType} />
-                <ColorSwatchInput name="color" defaultValue="#94a3b8" />
+              {isCategoryAllocationOpen ? (
+                <Form method="post" action={actionUrl} className="mt-2 flex items-center gap-3 border-t border-slate-200 pt-2">
+                  <input type="hidden" name="intent" value="create_category" />
+                  <input type="hidden" name="type" value={selectedBudgetType} />
+                  <ColorSwatchInput name="color" defaultValue="#94a3b8" />
                 <div className="min-w-0 flex-1">
                   <Input
                     name="name"
@@ -775,11 +823,12 @@ export default function LedgerBudgetSettingsPage() {
                     className="h-8 w-full rounded-none border-0 bg-transparent px-0 text-[13px] shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                   />
                 </div>
-                <Button type="submit" variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-xl text-slate-500 hover:bg-white">
-                  <Plus className="h-4 w-4" />
-                  <span className="sr-only">카테고리 추가</span>
-                </Button>
-              </Form>
+                  <Button type="submit" variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-xl text-slate-500 hover:bg-white">
+                    <Plus className="h-4 w-4" />
+                    <span className="sr-only">카테고리 추가</span>
+                  </Button>
+                </Form>
+              ) : null}
             </div>
 
             {!canSaveBudget ? (
@@ -799,4 +848,3 @@ export default function LedgerBudgetSettingsPage() {
     </div>
   );
 }
-
