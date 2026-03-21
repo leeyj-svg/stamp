@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 import { useFetcher } from "react-router";
-import type { MemoryPost } from "@prisma/client";
 import { Star, ArrowsOutSimple } from "@phosphor-icons/react";
 import { createPortal } from "react-dom";
+import { parseSpaceAiStyle, parseStoredPostIds, type SpacePost } from "~/lib/space-post";
 // 전역 Z-Index (클릭/드래그 시 최상단 노출용)
 let globalMaxZIndex = 100;
 
 interface Props {
-    post: MemoryPost;
+    post: SpacePost;
     index: number;
     canEdit: boolean;
     globalState: 0 | 1 | 2;
@@ -24,7 +24,7 @@ export default function GalaxyMessageCard({ post, index, canEdit, globalState }:
     const [myZIndex, setMyZIndex] = useState(10);
 
     // ✨ 드래그 & 좌표 관련 상태
-    const aiData = (post.aiStyle as any) || {};
+    const aiData = parseSpaceAiStyle(post.aiStyle);
     // 초기 위치 (DB 값 있으면 사용)
     const [position, setPosition] = useState({ x: aiData.x ?? 0, y: aiData.y ?? 0 });
     const [isDragging, setIsDragging] = useState(false);
@@ -101,7 +101,7 @@ export default function GalaxyMessageCard({ post, index, canEdit, globalState }:
 
     // 읽음 처리 (로컬 스토리지)
     useEffect(() => {
-        const readList = JSON.parse(localStorage.getItem("read_posts") || "[]");
+        const readList = parseStoredPostIds(localStorage.getItem("read_posts"));
         if (readList.includes(post.id)) setIsRead(true);
     }, [post.id]);
 
@@ -169,7 +169,7 @@ export default function GalaxyMessageCard({ post, index, canEdit, globalState }:
 
         if (!isRead) {
             setIsRead(true);
-            const readList = JSON.parse(localStorage.getItem("read_posts") || "[]");
+            const readList = parseStoredPostIds(localStorage.getItem("read_posts"));
             if (!readList.includes(post.id)) {
                 localStorage.setItem("read_posts", JSON.stringify([...readList, post.id]));
             }
@@ -184,7 +184,7 @@ export default function GalaxyMessageCard({ post, index, canEdit, globalState }:
     };
 
     // 스타일
-    const getThemeClass = (rawTheme: string) => {
+    const getThemeClass = (rawTheme?: string) => {
         if (!rawTheme) return "text-yellow-300 drop-shadow-[0_0_10px_rgba(253,224,71,0.6)]";
         const str = rawTheme.toLowerCase();
         if (str.includes("pink") || str.includes("red")) return "text-pink-400 drop-shadow-[0_0_10px_rgba(244,114,182,0.6)]";

@@ -1,4 +1,4 @@
-import {
+﻿import {
   type RouteConfig,
   layout,
   index,
@@ -7,10 +7,10 @@ import {
 } from "@react-router/dev/routes";
 
 export default [
-  // "routes/_layout.tsx" 파일을 전체 앱의 기본 레이아웃으로 사용합니다.
+  // "routes/_layout.tsx" ?뚯씪???꾩껜 ?깆쓽 湲곕낯 ?덉씠?꾩썐?쇰줈 ?ъ슜?⑸땲??
   layout("routes/_layout.tsx", [
 
-    // 이 레이아웃 안에서 보여줄 첫 페이지로 "routes/_layout._index.tsx" 파일을 지정합니다.
+    // ???덉씠?꾩썐 ?덉뿉??蹂댁뿬以?泥??섏씠吏濡?"routes/_layout._index.tsx" ?뚯씪??吏?뺥빀?덈떎.
     index("routes/_layout._index.tsx"),
 
     route("signup", "routes/signup.tsx"),
@@ -27,9 +27,19 @@ export default [
     route("community/:postId", "routes/community/$postId.tsx"),
     route("claim", "routes/claim.tsx"),
     route("mypage", "routes/mypage.tsx"),
+    route("ledger", "routes/ledger.tsx"),
+    route("ledger/settings", "routes/ledger.settings.tsx"),
+    route("ledger/settings/budgets", "routes/ledger.settings.budgets.tsx"),
+    route("ledger/settings/categories", "routes/ledger.settings.categories.tsx"),
+    route("ledger/budgets", "routes/ledger.budgets.tsx"),
+    route("ledger/stats", "routes/ledger.stats.tsx"),
+    route("ledger/list", "routes/ledger.list.tsx"),
+    route("ledger/new", "routes/ledger.new.tsx"),
+    route("ledger/entries/:entryId/edit", "routes/ledger.entries.$entryId.edit.tsx"),
+    route("ledger/:date", "routes/ledger.$date.tsx"),
     route("memory/new", "routes/memory/new.tsx"),
-    // 추후 이 레이아웃을 사용하는 다른 페이지가 생기면 여기에 추가하면 됩니다.
-    // 예: route("my-page", "routes/my-page.tsx"),s
+    // 異뷀썑 ???덉씠?꾩썐???ъ슜?섎뒗 ?ㅻⅨ ?섏씠吏媛 ?앷린硫??ш린??異붽??섎㈃ ?⑸땲??
+    // ?? route("my-page", "routes/my-page.tsx"),s
     ...prefix("forgot-password", [
       index("routes/forgot-password/index.tsx"),
       route("verify", "routes/forgot-password/verify.tsx"),
@@ -39,23 +49,23 @@ export default [
   ]),
 
   ...prefix("space", [
-    // 📂 routes/space/index.tsx (전체 우주 목록/대시보드)
+    // ?뱛 routes/space/index.tsx (?꾩껜 ?곗＜ 紐⑸줉/??쒕낫??
     index("routes/space/index.tsx"),
 
-    // 📂 routes/space/$spaceId/... (개별 우주 상세)
+    // ?뱛 routes/space/$spaceId/... (媛쒕퀎 ?곗＜ ?곸꽭)
     ...prefix(":spaceId", [
-      index("routes/space/$spaceId/index.tsx"),      // 메인 화면
-      route("write", "routes/space/$spaceId/write.tsx"), // 글쓰기
-      route("admin", "routes/space/$spaceId/admin.tsx"), // 관리자
-      route("mine", "routes/space/$spaceId/mine.tsx"),   // 내 글 목록
-      route("success", "routes/space/$spaceId/success.tsx"), // 성공 화면
+      index("routes/space/$spaceId/index.tsx"),      // 硫붿씤 ?붾㈃
+      route("write", "routes/space/$spaceId/write.tsx"), // 湲?곌린
+      route("admin", "routes/space/$spaceId/admin.tsx"), // 愿由ъ옄
+      route("mine", "routes/space/$spaceId/mine.tsx"),   // ??湲 紐⑸줉
+      route("success", "routes/space/$spaceId/success.tsx"), // ?깃났 ?붾㈃
     ]),
   ]),
 
   route("admin", "routes/admin/_layout.tsx", [
     index("routes/admin/index.tsx"),
 
-    // 👇 route(...)를 prefix(...)로 변경합니다.
+    // ?몙 route(...)瑜?prefix(...)濡?蹂寃쏀빀?덈떎.
     ...prefix("events", [
       index("routes/admin/events/index.tsx"),
       route("stats", "routes/admin/events/stats.tsx"),
@@ -97,3 +107,6 @@ export default [
   route("api/stamps/view", "routes/api/stamps/view.ts"),
   route("api/coupons/issue", "routes/api/coupons/issue.ts"),
 ] satisfies RouteConfig;
+
+
+

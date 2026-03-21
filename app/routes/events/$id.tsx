@@ -71,7 +71,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const isParticipant = Boolean(participation);
   const isAdmin = user.role === "ADMIN";
   if (!isParticipant && !isAdmin) {
-    throw new Response("참여자만 접근할 수 있는 이벤트입니다.", { status: 403 });
+    throw new Response("이벤트 참여자만 볼 수 있습니다.", { status: 403 });
   }
   const hasReviewed = event.reviews.some((review) => review.user.id === user.id);
   const isLiked = Boolean(
@@ -83,6 +83,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
   return { event, isParticipant, hasReviewed, currentUserId: user.id, isLiked };
 };
+
+type LoaderData = Awaited<ReturnType<typeof loader>>;
+type EventReview = LoaderData["event"]["reviews"][number];
 
 export default function EventDetailPage() {
   const { event, isParticipant, hasReviewed, currentUserId, isLiked } = useLoaderData<typeof loader>();
@@ -159,7 +162,7 @@ export default function EventDetailPage() {
 
               {durationString && (
                 <div className="flex items-center">
-                  <span className="ml-6 text-muted-foreground text-xs">총 {durationString} 진행</span>
+                  <span className="ml-6 text-muted-foreground text-xs">총 {durationString} 동안</span>
                 </div>
               )}
 
@@ -169,7 +172,7 @@ export default function EventDetailPage() {
                   onClick={() => setShowParticipants((prev) => !prev)}
                 >
                   <Users className="h-4 w-4 mr-2 text-[#4FC3F7]" />
-                  <strong>총 참가자</strong>
+                  <strong>참여자</strong>
                   <span className="ml-2">{totalParticipants}명</span>
                   <ChevronDown
                     className={`h-4 w-4 ml-auto text-muted-foreground transition-transform duration-200 ${
@@ -195,7 +198,7 @@ export default function EventDetailPage() {
                       ))}
 
                       {totalParticipants === 0 && (
-                        <li className="text-sm text-muted-foreground">아직 등록된 참가자가 없습니다.</li>
+                        <li className="text-sm text-muted-foreground">아직 참여자가 없습니다.</li>
                       )}
                     </ul>
                   </div>
@@ -213,7 +216,7 @@ export default function EventDetailPage() {
             {isParticipant && !hasReviewed && <ReviewForm eventId={event.id} />}
 
             {event.reviews.length === 0 ? (
-              <p className="text-gray-500 text-center py-4">아직 이 이벤트에 대한 리뷰가 없습니다.</p>
+              <p className="text-gray-500 text-center py-4">아직 등록된 리뷰가 없습니다.</p>
             ) : (
               <div className="space-y-6 pt-4">
                 {event.reviews.map((review) => (
@@ -235,7 +238,7 @@ export default function EventDetailPage() {
             variant="outline"
             className="w-full max-w-sm border-2 border-[#81C784] text-[#81C784] hover:bg-[#E8F5E9] hover:text-[#4CAF50] font-semibold"
           >
-            <Link to="/events">전체 목록으로</Link>
+            <Link to="/events">이벤트 목록</Link>
           </Button>
         </div>
       </div>
@@ -253,7 +256,7 @@ export default function EventDetailPage() {
   );
 }
 
-function ReviewItem({ review, currentUserId, eventId }: { review: any; currentUserId: string; eventId: string }) {
+function ReviewItem({ review, currentUserId, eventId }: { review: EventReview; currentUserId: string; eventId: string }) {
   const [isEditing, setIsEditing] = useState(false);
   const isMyReview = review.user.id === currentUserId;
 
@@ -316,7 +319,7 @@ function ReviewForm({
 }: {
   eventId: string;
   intent?: "CREATE" | "UPDATE";
-  existingReview?: any;
+  existingReview?: EventReview;
   onCancel?: () => void;
 }) {
   const [rating, setRating] = useState(existingReview?.rating || 0);
@@ -327,10 +330,10 @@ function ReviewForm({
     <fetcher.Form method="post" action="/api/events/reviews" className="p-4 border rounded-lg mb-6 space-y-4 bg-background">
       <input type="hidden" name="intent" value={intent} />
       <input type="hidden" name="eventId" value={eventId} />
-      {intent === "UPDATE" && <input type="hidden" name="reviewId" value={existingReview.id} />}
+      {intent === "UPDATE" && <input type="hidden" name="reviewId" value={existingReview?.id} />}
 
       <div>
-        <Label className="font-semibold">별점</Label>
+        <Label className="font-semibold">평점</Label>
         <div className="flex items-center mt-2">
           {[1, 2, 3, 4, 5].map((star) => (
             <button key={star} type="button" onClick={() => setRating(star)}>
@@ -397,5 +400,6 @@ function DeleteMyReviewDialog({ reviewId, eventId }: { reviewId: number; eventId
     </AlertDialog>
   );
 }
+
 
 

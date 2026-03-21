@@ -49,7 +49,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionDat
   const uploaderNameInput = (formData.get("uploaderName") as string | null)?.trim() || null;
 
   if (!Number.isInteger(albumId) || albumId <= 0) {
-    return { error: "¾Ù¹üÀ» ¼±ÅÃÇØ ÁÖ¼¼¿ä." };
+    return { error: "ì•¨ë²”ì„ ì„ íƒí•´ ì£¼ì„¸ìš”." };
   }
 
   const album = await db.photoAlbum.findFirst({
@@ -58,12 +58,12 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionDat
   });
 
   if (!album) {
-    return { error: "À¯È¿ÇÏÁö ¾ÊÀº ¾Ù¹üÀÔ´Ï´Ù." };
+    return { error: "ìœ íš¨í•˜ì§€ ì•Šì€ ì•¨ë²”ì…ë‹ˆë‹¤." };
   }
 
   const files = formData.getAll("photos").filter((item): item is File => item instanceof File && item.size > 0);
   if (files.length === 0) {
-    return { error: "¾÷·ÎµåÇÒ »çÁøÀ» ¼±ÅÃÇØ ÁÖ¼¼¿ä." };
+    return { error: "ì—…ë¡œë“œí•  ì‚¬ì§„ì„ ì„ íƒí•´ ì£¼ì„¸ìš”." };
   }
 
   let immichAlbumId = album.immichAlbumId;
@@ -128,27 +128,27 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionDat
       immichAssetId,
       caption,
       uploadedByUserId: user?.id || null,
-      uploaderName: user?.name || uploaderNameInput || "ÀÍ¸í",
+      uploaderName: user?.name || uploaderNameInput || "ìµëª…",
       takenAt: local.takenAt,
     });
   }
 
   if (uploadRows.length === 0) {
-    return { error: "ÀÌ¹ÌÁö ¾÷·Îµå¿¡ ½ÇÆĞÇß½À´Ï´Ù. ÀúÀå ¼­¹ö ¼³Á¤À» È®ÀÎÇØ ÁÖ¼¼¿ä." };
+    return { error: "ì´ë¯¸ì§€ ì—…ë¡œë“œì— ì‹¤íŒ¨í–ˆìŠµë‹ˆë‹¤. ì €ì¥ ì„œë²„ ì„¤ì •ì„ í™•ì¸í•´ ì£¼ì„¸ìš”." };
   }
 
   await db.albumPhoto.createMany({ data: uploadRows });
 
   const partial = uploadRows.length < files.length;
   const immichSuffix = isImmichSyncAvailable()
-    ? ` ¡¤ Immich ${immichSyncedCount}/${uploadRows.length}Àå µ¿±âÈ­${immichSyncFailed ? " (ÀÏºÎ ½ÇÆĞ)" : ""}`
+    ? ` Â· Immich ${immichSyncedCount}/${uploadRows.length}ì¥ ë™ê¸°í™”${immichSyncFailed ? " (ì¼ë¶€ ì‹¤íŒ¨)" : ""}`
     : "";
 
   if (partial) {
-    return { success: `${uploadRows.length}/${files.length}Àå ¾÷·Îµå ¿Ï·á (ÀÏºÎ ½ÇÆĞ)${immichSuffix}` };
+    return { success: `${uploadRows.length}/${files.length}ì¥ ì—…ë¡œë“œ ì™„ë£Œ (ì¼ë¶€ ì‹¤íŒ¨)${immichSuffix}` };
   }
 
-  return { success: `${uploadRows.length}Àå ¾÷·Îµå ¿Ï·á${immichSuffix}` };
+  return { success: `${uploadRows.length}ì¥ ì—…ë¡œë“œ ì™„ë£Œ${immichSuffix}` };
 };
 
 export default function AlbumUploadPage() {
@@ -161,16 +161,16 @@ export default function AlbumUploadPage() {
     <div className="max-w-xl mx-auto p-4">
       <Card>
         <CardHeader>
-          <CardTitle>¾Ù¹ü »çÁø ¾÷·Îµå</CardTitle>
-          <CardDescription>»çÁø ¾÷·Îµå´Â ´©±¸³ª °¡´É, ¾Ù¹ü Á¶È¸´Â È¸¿ø Àü¿ë</CardDescription>
+          <CardTitle>ì•¨ë²” ì‚¬ì§„ ì—…ë¡œë“œ</CardTitle>
+          <CardDescription>ì‚¬ì§„ ì—…ë¡œë“œëŠ” ëˆ„êµ¬ë‚˜ ê°€ëŠ¥, ì•¨ë²” ì¡°íšŒëŠ” íšŒì› ì „ìš©</CardDescription>
           <CardDescription>
-            Immich ¿¬µ¿: {immichSyncEnabled ? "È°¼ºÈ­µÊ" : "ºñÈ°¼ºÈ­µÊ (IMMICH_URL, IMMICH_API_KEY ÇÊ¿ä)"}
+            Immich ì—°ë™: {immichSyncEnabled ? "í™œì„±í™”ë¨" : "ë¹„í™œì„±í™”ë¨ (IMMICH_URL, IMMICH_API_KEY í•„ìš”)"}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <Form method="post" encType="multipart/form-data" className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="albumId">¾Ù¹ü ¼±ÅÃ</Label>
+              <Label htmlFor="albumId">ì•¨ë²” ì„ íƒ</Label>
               <select
                 id="albumId"
                 name="albumId"
@@ -179,7 +179,7 @@ export default function AlbumUploadPage() {
                 required
               >
                 <option value="" disabled>
-                  ¾Ù¹ü ¼±ÅÃ
+                  ì•¨ë²” ì„ íƒ
                 </option>
                 {albums.map((album) => (
                   <option key={album.id} value={album.id}>
@@ -191,18 +191,18 @@ export default function AlbumUploadPage() {
 
             {!user && (
               <div className="space-y-2">
-                <Label htmlFor="uploaderName">¾÷·Î´õ ÀÌ¸§(¼±ÅÃ)</Label>
-                <Input id="uploaderName" name="uploaderName" placeholder="ÀÍ¸íÀ¸·Î ³²±â·Á¸é ºñ¿öµÎ¼¼¿ä" />
+                <Label htmlFor="uploaderName">ì—…ë¡œë” ì´ë¦„(ì„ íƒ)</Label>
+                <Input id="uploaderName" name="uploaderName" placeholder="ìµëª…ìœ¼ë¡œ ë‚¨ê¸°ë ¤ë©´ ë¹„ì›Œë‘ì„¸ìš”" />
               </div>
             )}
 
             <div className="space-y-2">
-              <Label htmlFor="caption">¼³¸í(¼±ÅÃ)</Label>
-              <Input id="caption" name="caption" placeholder="¿¹: 3¿ù 2ÁÖ ºÀ»ç È°µ¿" />
+              <Label htmlFor="caption">ì„¤ëª…(ì„ íƒ)</Label>
+              <Input id="caption" name="caption" placeholder="ì˜ˆ: 3ì›” 2ì£¼ ë´‰ì‚¬ í™œë™" />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="photos">»çÁø ÆÄÀÏ</Label>
+              <Label htmlFor="photos">ì‚¬ì§„ íŒŒì¼</Label>
               <Input id="photos" type="file" name="photos" accept="image/*" multiple required />
             </div>
 
@@ -210,7 +210,7 @@ export default function AlbumUploadPage() {
             {actionData?.success && <p className="text-sm text-green-600">{actionData.success}</p>}
 
             <Button type="submit" className="w-full" disabled={isSubmitting || albums.length === 0}>
-              {isSubmitting ? "¾÷·Îµå Áß..." : "¾÷·Îµå"}
+              {isSubmitting ? "ì—…ë¡œë“œ ì¤‘..." : "ì—…ë¡œë“œ"}
             </Button>
           </Form>
         </CardContent>

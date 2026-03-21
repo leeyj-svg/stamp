@@ -1,9 +1,9 @@
-// app/exif-parser.d.ts
+﻿// app/exif-parser.d.ts
 
 declare module 'exif-parser' {
     interface ExifTags {
-        DateTimeOriginal?: number; // 우리가 필요한 촬영 날짜 (Unix Timestamp)
-        [key: string]: any;
+        DateTimeOriginal?: number; // ???? ??? ?? ?? ?? (Unix Timestamp)
+        [key: string]: unknown;
     }
 
     interface ExifResult {
@@ -19,6 +19,6 @@ declare module 'exif-parser' {
         parse(): ExifResult;
     }
 
-    // create 함수가 버퍼를 받아서 파서를 반환함
+    // create ??? ??? ?? ??? ?????.
     export function create(buffer: Buffer): ExifParser;
 }

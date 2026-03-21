@@ -1,4 +1,4 @@
-import {
+﻿import {
   type LoaderFunctionArgs,
   useFetcher,
   useLoaderData,
@@ -14,7 +14,7 @@ import { assertCategoryAccess, requireAdminAccessScope } from '~/lib/admin-acces
 import { db } from '~/lib/db.server';
 import { sendAlimtalk, AlimtalkType } from '~/lib/alimtalk.server';
 import { commitSession, getFlashSession } from '~/lib/session.server';
-import { uploadImages } from '~/lib/upload.server';
+import { deleteImages, uploadImages } from '~/lib/upload.server';
 
 const STAMPS_PER_CARD = 10;
 
@@ -51,7 +51,7 @@ const participantSchema = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['id'],
-          message: '임시 코드 형식이 올바르지 않습니다.',
+          message: '초대 코드 형식이 올바르지 않습니다.',
         });
       }
 
@@ -60,13 +60,13 @@ const participantSchema = z
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['customExpiryDate'],
-            message: '직접 지정 만료일이 필요합니다.',
+            message: '사용자 지정 만료일을 입력해 주세요.',
           });
         } else if (Number.isNaN(Date.parse(participant.customExpiryDate))) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['customExpiryDate'],
-            message: '만료일 형식이 올바르지 않습니다.',
+            message: '올바른 날짜 형식이 아닙니다.',
           });
         }
       }
@@ -75,25 +75,25 @@ const participantSchema = z
 
 const eventFormSchema = z
   .object({
-    name: z.string().min(2, '이벤트 이름은 2글자 이상이어야 합니다.'),
+    name: z.string().min(2, '이벤트명은 2자 이상이어야 합니다.'),
     description: z.string().optional(),
-    imageUrl: z.any().optional(),
+    imageUrl: z.unknown().optional(),
     isAllDay: z.boolean(),
-    categoryId: z.string().min(1, '카테고리를 선택해주세요.'),
+    categoryId: z.string().min(1, '카테고리를 선택해 주세요.'),
     startDate: z.date().refine((date) => date, {
-      message: '시작 날짜를 선택해주세요.',
+      message: '시작 날짜를 선택해 주세요.',
     }),
     endDate: z.date().refine((date) => date, {
-      message: '종료 날짜를 선택해주세요.',
+      message: '종료 날짜를 선택해 주세요.',
     }),
-    participants: z.array(participantSchema).min(1, '참가자를 1명 이상 등록해주세요.'),
+    participants: z.array(participantSchema).min(1, '참여자는 1명 이상 추가해 주세요.'),
   })
   .superRefine((data, ctx) => {
     if (data.endDate < data.startDate) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['endDate'],
-        message: '종료일은 시작일보다 빠를 수 없습니다.',
+        message: '종료일은 시작일보다 늦어야 합니다.',
       });
     }
 
@@ -104,7 +104,7 @@ const eventFormSchema = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['participants', index, 'id'],
-          message: '중복된 참가자가 포함되어 있습니다.',
+          message: '중복된 참여자가 포함되어 있습니다.',
         });
       }
       seen.add(key);
@@ -135,12 +135,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     try {
       participantsPayload = JSON.parse(participantsField);
     } catch {
-      return errorResponse(request, '참가자 정보 형식이 올바르지 않습니다.');
+      return errorResponse(request, '참여자 정보 형식이 올바르지 않습니다.');
     }
   }
 
   if (!Array.isArray(participantsPayload)) {
-    return errorResponse(request, '참가자 정보 형식이 올바르지 않습니다.');
+    return errorResponse(request, '참여자 정보 형식이 올바르지 않습니다.');
   }
 
   const result = eventFormSchema.safeParse({
@@ -165,66 +165,97 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const { name, description, categoryId, isAllDay, startDate, endDate, participants } = result.data;
   assertCategoryAccess(scope, Number(categoryId));
+  const userParticipants = participants.filter((participant) => participant.type === 'user');
+  const tempPhoneParticipants = participants.filter((participant) => participant.type === 'temp-phone');
+  const tempCodeParticipants = participants.filter((participant) => participant.type === 'temp-code');
+  const requestedUserIds = [...new Set(userParticipants.map((participant) => participant.id))];
+  const requestedPhones = [...new Set(tempPhoneParticipants.map((participant) => participant.id))];
+
+  if (requestedUserIds.length > 0) {
+    const existingUsers = await db.user.findMany({
+      where: { id: { in: requestedUserIds } },
+      select: { id: true },
+    });
+
+    if (existingUsers.length !== requestedUserIds.length) {
+      return errorResponse(request, '선택한 사용자가 존재하지 않습니다.');
+    }
+  }
+
+  if (requestedPhones.length > 0) {
+    const usersByPhone = await db.user.findMany({
+      where: { phoneNumber: { in: requestedPhones } },
+      select: { phoneNumber: true, status: true },
+    });
+
+    const registeredPhone = usersByPhone.find((user) => user.status !== UserStatus.TEMPORARY);
+    if (registeredPhone) {
+      return errorResponse(request, '기존 회원은 사용자 검색에서 추가해 주세요.');
+    }
+  }
+
+  if (tempCodeParticipants.length > 0) {
+    const existingCodes = await db.claimableStamp.findMany({
+      where: { claimCode: { in: tempCodeParticipants.map((participant) => participant.id) } },
+      select: { claimCode: true },
+    });
+
+    if (existingCodes.length > 0) {
+      return errorResponse(request, '이미 사용 중인 초대 코드가 있습니다.');
+    }
+  }
+
   const imageFiles = formData
     .getAll('images')
     .filter((value): value is File => value instanceof File && value.size > 0);
+  let uploadedImageUrls: { url: string; takenAt: Date | null }[] = [];
 
   try {
-    const imageUrls = await uploadImages(imageFiles);
-    const userParticipants = participants.filter((participant) => participant.type === 'user');
-    const tempPhoneParticipants = participants.filter((participant) => participant.type === 'temp-phone');
-    const tempCodeParticipants = participants.filter((participant) => participant.type === 'temp-code');
-
-    const userIdSet = new Set(userParticipants.map((participant) => participant.id));
-
-    if (tempPhoneParticipants.length > 0) {
-      const uniquePhones = [...new Set(tempPhoneParticipants.map((participant) => participant.id))];
-      const nameByPhone = new Map(tempPhoneParticipants.map((participant) => [participant.id, participant.name]));
-
-      const existingTempUsers = await db.user.findMany({
-        where: { phoneNumber: { in: uniquePhones } },
-        select: { id: true, phoneNumber: true },
-      });
-
-      const existingPhoneSet = new Set(existingTempUsers.map((user) => user.phoneNumber));
-      const missingPhones = uniquePhones.filter((phoneNumber) => !existingPhoneSet.has(phoneNumber));
-
-      if (missingPhones.length > 0) {
-        await db.user.createMany({
-          data: missingPhones.map((phoneNumber) => ({
-            name: nameByPhone.get(phoneNumber) ?? `임시회원-${phoneNumber.slice(-4)}`,
-            phoneNumber,
-            status: UserStatus.TEMPORARY,
-          })),
-          skipDuplicates: true,
-        });
+    uploadedImageUrls = await uploadImages(imageFiles);
+    if (uploadedImageUrls.length !== imageFiles.length) {
+      if (uploadedImageUrls.length > 0) {
+        await deleteImages(uploadedImageUrls.map((image) => image.url));
       }
 
-      const resolvedTempUsers = await db.user.findMany({
-        where: { phoneNumber: { in: uniquePhones } },
-        select: { id: true },
-      });
-
-      for (const user of resolvedTempUsers) {
-        userIdSet.add(user.id);
-      }
+      return errorResponse(request, '일부 이미지 업로드에 실패했습니다. 다시 시도해 주세요.', 500);
     }
 
-    if (tempCodeParticipants.length > 0) {
-      const existingCodes = await db.claimableStamp.findMany({
-        where: { claimCode: { in: tempCodeParticipants.map((participant) => participant.id) } },
-        select: { claimCode: true },
-      });
-
-      if (existingCodes.length > 0) {
-        return errorResponse(request, '이미 사용 중인 임시 코드가 포함되어 있습니다.');
-      }
-    }
-
-    const userIdsToStamp = [...userIdSet];
     const alimtalkData: { name: string; phoneNumber: string; currentCount: number }[] = [];
 
     await db.$transaction(async (prisma) => {
+      const userIdSet = new Set(requestedUserIds);
+
+      if (requestedPhones.length > 0) {
+        const nameByPhone = new Map(tempPhoneParticipants.map((participant) => [participant.id, participant.name]));
+        const existingTempUsers = await prisma.user.findMany({
+          where: { phoneNumber: { in: requestedPhones } },
+          select: { id: true, phoneNumber: true },
+        });
+        const existingPhoneSet = new Set(existingTempUsers.map((user) => user.phoneNumber));
+        const missingPhones = requestedPhones.filter((phoneNumber) => !existingPhoneSet.has(phoneNumber));
+
+        if (missingPhones.length > 0) {
+          await prisma.user.createMany({
+            data: missingPhones.map((phoneNumber) => ({
+              name: nameByPhone.get(phoneNumber) ?? `temp-user-${phoneNumber.slice(-4)}`,
+              phoneNumber,
+              status: UserStatus.TEMPORARY,
+            })),
+            skipDuplicates: true,
+          });
+        }
+
+        const resolvedTempUsers = await prisma.user.findMany({
+          where: { phoneNumber: { in: requestedPhones } },
+          select: { id: true },
+        });
+
+        for (const user of resolvedTempUsers) {
+          userIdSet.add(user.id);
+        }
+      }
+
+      const userIdsToStamp = [...userIdSet];
       const newEvent = await prisma.event.create({
         data: {
           name,
@@ -233,7 +264,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           startDate,
           endDate,
           images: {
-            create: imageUrls.map((imageObj) => ({ url: imageObj.url })),
+            create: uploadedImageUrls.map((imageObj) => ({ url: imageObj.url })),
           },
           categoryId: Number(categoryId),
         },
@@ -331,7 +362,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
       }
     });
-
     const appUrl = process.env.APP_URL ?? new URL(request.url).origin;
     await Promise.allSettled(
       alimtalkData.map((data) =>
@@ -352,15 +382,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const flashSession = await getFlashSession(request.headers.get('Cookie'));
     flashSession.flash('toast', {
       type: 'success',
-      message: '이벤트가 성공적으로 등록되었습니다.',
+      message: '이벤트가 성공적으로 생성되었습니다.',
     });
 
     return redirect('/admin/events', {
       headers: [['Set-Cookie', await commitSession(flashSession)]],
     });
   } catch (error) {
-    console.error('이벤트 등록 실패:', error);
-    return errorResponse(request, '이벤트 등록 중 오류가 발생했습니다.', 500);
+    if (uploadedImageUrls.length > 0) {
+      await deleteImages(uploadedImageUrls.map((image) => image.url));
+    }
+
+    console.error('이벤트 생성 오류:', error);
+    return errorResponse(request, '이벤트 생성 중 오류가 발생했습니다.', 500);
   }
 };
 
@@ -370,3 +404,6 @@ export default function CreateEventPage() {
 
   return <EventForm fetcher={fetcher} categories={categories} />;
 }
+
+
+
