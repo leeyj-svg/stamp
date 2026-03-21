@@ -12,6 +12,7 @@ import {
 } from "~/lib/ledger-budget";
 import { ensureLedgerBudgetTemplatePeriod, resetAllLedgerBudgetPeriodsFromTemplate } from "~/lib/ledger-budget.server";
 import { Button } from "~/components/ui/button";
+import { BudgetAmountInput } from "~/components/budget-amount-input";
 import { ColorSwatchInput } from "~/components/color-swatch-input";
 import {
   DropdownMenu,
@@ -565,7 +566,7 @@ export default function LedgerBudgetSettingsPage() {
                     <div className="w-28 shrink-0">
                       <p className="text-xs font-semibold text-slate-700">{selectedMeta.totalLabel}</p>
                     </div>
-                    <Input
+                    <BudgetAmountInput
                       type="text"
                       inputMode="numeric"
                       value={totalBudgets[selectedBudgetType] ?? ""}
@@ -775,7 +776,7 @@ export default function LedgerBudgetSettingsPage() {
                         </div>
 
                         <div className="ml-3 flex shrink-0 items-center gap-2">
-                          <Input
+                          <BudgetAmountInput
                             type="text"
                             inputMode="numeric"
                             value={budgetValues[`${selectedBudgetType}:${category.id}`] ?? ""}

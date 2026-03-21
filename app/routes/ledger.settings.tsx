@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { ArrowLeft, MoreVertical } from "lucide-react";
 
 import { Button } from "~/components/ui/button";
+import { BudgetAmountInput } from "~/components/budget-amount-input";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -286,10 +287,10 @@ export default function LedgerSettingsPage() {
                   className="h-3.5 w-3.5 shrink-0 accent-slate-900"
                 />
                 <span className="ml-2 shrink-0">급여</span>
-                <Input
-                  name="paydayDay"
-                  type="number"
-                  min={1}
+                  <Input
+                    name="paydayDay"
+                    type="number"
+                    min={1}
                   max={31}
                   defaultValue={settings.paydayDay ?? 25}
                   className="h-7 w-16 rounded-xl border-slate-200 px-2 text-center text-xs"
@@ -391,7 +392,7 @@ export default function LedgerSettingsPage() {
                   <div className="w-28 shrink-0">
                     <p className="text-xs font-medium text-slate-600">{getBudgetSectionMeta(selectedBudgetType).totalLabel}</p>
                   </div>
-                  <Input
+                  <BudgetAmountInput
                     type="text"
                     inputMode="numeric"
                     value={quickBudgetTotals[selectedBudgetType] ?? ""}

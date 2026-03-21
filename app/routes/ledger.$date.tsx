@@ -138,6 +138,27 @@ function buildLedgerListLink(
   return `/ledger/list?${params.toString()}`;
 }
 
+function buildLedgerWeekListLink(
+  monthToken: string,
+  filter: EntryFilterValue,
+  showCurrentWeekBudget = false,
+  selectedCategoryIds: number[] = [],
+) {
+  const params = new URLSearchParams({ month: monthToken });
+  if (filter !== "ALL") {
+    params.set("type", filter);
+    if (selectedCategoryIds.length > 0) {
+      params.set("categoryIds", selectedCategoryIds.join(","));
+    }
+  }
+
+  if (showCurrentWeekBudget) {
+    params.set("currentWeek", "1");
+  }
+
+  return `/ledger/weeks?${params.toString()}`;
+}
+
 function toggleEntryFilter(currentFilter: EntryFilterValue, nextFilter: LedgerEntryTypeValue): EntryFilterValue {
   return currentFilter === nextFilter ? "ALL" : nextFilter;
 }
@@ -508,7 +529,15 @@ export default function LedgerDatePage() {
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
                   <Link to={buildLedgerListLink(calendarMonthToken, selectedFilter, showCurrentWeekBudget, selectedCategoryIds)} reloadDocument>
-                    월 리스트 내역
+                    월 리스트 보기
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link
+                    to={buildLedgerWeekListLink(calendarMonthToken, selectedFilter, showCurrentWeekBudget, selectedCategoryIds)}
+                    reloadDocument
+                  >
+                    주별 리스트 보기
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
