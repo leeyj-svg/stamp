@@ -119,7 +119,7 @@ export default function AdminAlbumPage() {
           <CardDescription>운영진이 앨범을 만들고, 이용자는 활성 앨범에 사진을 업로드합니다.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Form method="post" className="grid gap-3 md:grid-cols-[1fr_1fr_auto] items-end">
+          <Form method="post" className="grid items-end gap-3 md:grid-cols-[1fr_1fr_auto]">
             <input type="hidden" name="intent" value="create" />
             <div className="space-y-1">
               <Label htmlFor="name">앨범 이름</Label>
@@ -146,7 +146,7 @@ export default function AdminAlbumPage() {
             <p className="text-sm text-muted-foreground">등록된 앨범이 없습니다.</p>
           ) : (
             albums.map((album) => (
-              <div key={album.id} className="border rounded-md p-3 flex items-center justify-between gap-3">
+              <div key={album.id} className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div>
                   <p className="font-semibold">{album.name}</p>
                   <p className="text-xs text-muted-foreground">

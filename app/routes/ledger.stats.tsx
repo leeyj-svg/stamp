@@ -1,0 +1,2110 @@
+﻿import { Link, useLoaderData, type LoaderFunctionArgs } from "react-router";
+import { useMemo, useState } from "react";
+import { ArrowLeft, ChevronLeft, ChevronRight, MoreVertical } from "lucide-react";
+
+import { Button } from "~/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "~/components/ui/dropdown-menu";
+import { getSessionWithPermission } from "~/lib/auth.server";
+import { db } from "~/lib/db.server";
+import {
+  formatLedgerAmount,
+  getPaymentMethodLabel,
+  getTypeLabel,
+  type LedgerEntryTypeValue,
+  type LedgerPaymentMethodValue,
+} from "~/lib/ledger-entry";
+import { createEmptyBudgetTotals, getBudgetPeriodDayCount } from "~/lib/ledger-budget";
+import { ensureLedgerSetup, getMonthToken, shiftMonthToken } from "~/lib/ledger";
+import { cn } from "~/lib/utils";
+
+type EntryFilterValue = "ALL" | LedgerEntryTypeValue;
+type StatsTabValue = "SUMMARY" | "ANALYSIS" | "FLOW";
+type WeekStartDayValue = "MONDAY" | "SUNDAY";
+type BudgetPeriodSummary = {
+  id: number;
+  periodStartAt: string;
+  periodEndAt: string;
+  plans: Array<{
+    type: LedgerEntryTypeValue;
+    totalAmount: number;
+    allocations: Array<{
+      categoryId: number;
+      categoryName: string;
+      plannedAmount: number;
+      isFixed: boolean;
+    }>;
+  }>;
+};
+
+type AmountBreakdownItem = {
+  label: string;
+  amount: number;
+  percent: number;
+};
+
+type TagBreakdownItem = {
+  label: string;
+  count: number;
+  percent: number;
+  linkedAmount: number;
+};
+
+type DonutTone = "category" | "payment";
+type CategoryBudgetUsageItem = {
+  label: string;
+  plannedAmount: number;
+  actualAmount: number;
+  remainingAmount: number;
+  progressRaw: number;
+  progressValue: number;
+  isFixed: boolean;
+};
+
+type HighlightDayCardItem = {
+  title: string;
+  dateLabel: string;
+  amount: number;
+  toneClassName: string;
+  softBgClassName: string;
+};
+
+type WeeklyGoalRateItem = {
+  id: string;
+  type: LedgerEntryTypeValue;
+  label: string;
+  actual: number;
+  target: number;
+  progressRaw: number;
+  progressValue: number;
+  gapAmount: number;
+  labelClassName: string;
+  barClassName: string;
+};
+
+const WEEKLY_STACK_BAR_CLASSES = [
+  "bg-sky-300",
+  "bg-rose-300",
+  "bg-emerald-300",
+  "bg-violet-300",
+  "bg-amber-300",
+  "bg-cyan-300",
+  "bg-fuchsia-300",
+  "bg-slate-400",
+] as const;
+
+function parseMonthToken(value: string | null) {
+  if (!value || !/^\d{4}-\d{2}$/.test(value)) {
+    return null;
+  }
+
+  return value;
+}
+
+function parseEntryFilter(value: string | null): EntryFilterValue {
+  if (value === "INCOME" || value === "EXPENSE" || value === "SAVING") {
+    return value;
+  }
+
+  return "ALL";
+}
+
+function getMonthStart(monthToken: string) {
+  const [year, month] = monthToken.split("-").map(Number);
+  return new Date(year, month - 1, 1, 12, 0, 0, 0);
+}
+
+function getMonthLabel(date: Date) {
+  return new Intl.DateTimeFormat("ko-KR", {
+    year: "numeric",
+    month: "long",
+  }).format(date);
+}
+
+function buildLedgerStatsLink(monthToken: string, filter: EntryFilterValue) {
+  const params = new URLSearchParams({ month: monthToken });
+  if (filter !== "ALL") {
+    params.set("type", filter);
+  }
+
+  return `/ledger/stats?${params.toString()}`;
+}
+
+function buildLedgerMonthLink(monthToken: string, filter: EntryFilterValue) {
+  const params = new URLSearchParams({ month: monthToken });
+  if (filter !== "ALL") {
+    params.set("type", filter);
+  }
+
+  return `/ledger?${params.toString()}`;
+}
+
+function buildLedgerDateLink(dateToken: string, monthToken: string, filter: EntryFilterValue) {
+  const params = new URLSearchParams({ month: monthToken });
+  if (filter !== "ALL") {
+    params.set("type", filter);
+  }
+
+  return `/ledger/${dateToken}?${params.toString()}`;
+}
+
+function buildLedgerBudgetLink(monthToken: string, filter: EntryFilterValue) {
+  const params = new URLSearchParams({ month: monthToken });
+  if (filter !== "ALL") {
+    params.set("type", filter);
+  }
+
+  return `/ledger/budgets?${params.toString()}`;
+}
+
+function buildLedgerListLink(monthToken: string, filter: EntryFilterValue) {
+  const params = new URLSearchParams({ month: monthToken });
+  if (filter !== "ALL") {
+    params.set("type", filter);
+  }
+
+  return `/ledger/list?${params.toString()}`;
+}
+
+function toggleEntryFilter(currentFilter: EntryFilterValue, nextFilter: LedgerEntryTypeValue): EntryFilterValue {
+  return currentFilter === nextFilter ? "ALL" : nextFilter;
+}
+
+function roundPercent(value: number, total: number) {
+  if (total <= 0) {
+    return 0;
+  }
+
+  return Math.round((value / total) * 100);
+}
+
+function getAmountBarWidth(percent: number) {
+  if (percent <= 0) {
+    return 0;
+  }
+
+  return Math.max(percent, 8);
+}
+
+function formatStatsDay(dateToken: string) {
+  const date = new Date(`${dateToken}T12:00:00`);
+  return new Intl.DateTimeFormat("ko-KR", {
+    month: "numeric",
+    day: "numeric",
+    weekday: "short",
+  }).format(date);
+}
+
+function formatWeekRangeLabel(start: Date, end: Date) {
+  const formatter = new Intl.DateTimeFormat("ko-KR", {
+    month: "numeric",
+    day: "numeric",
+  });
+
+  return `${formatter.format(start)} - ${formatter.format(end)}`;
+}
+
+function formatSignedLedgerAmount(amount: number) {
+  if (amount === 0) {
+    return formatLedgerAmount(0);
+  }
+
+  return `${amount > 0 ? "+" : "-"}${formatLedgerAmount(Math.abs(amount))}`;
+}
+
+function formatComparisonAmount(amount: number) {
+  return amount < 0 ? formatSignedLedgerAmount(amount) : formatLedgerAmount(amount);
+}
+
+function clampPercent(value: number) {
+  return Math.max(0, Math.min(100, value));
+}
+
+function getOverlapDayCount(rangeStart: Date, rangeEnd: Date, periodStart: Date, periodEnd: Date) {
+  const start = Math.max(rangeStart.getTime(), periodStart.getTime());
+  const end = Math.min(rangeEnd.getTime(), periodEnd.getTime());
+  if (end <= start) {
+    return 0;
+  }
+
+  return (end - start) / (1000 * 60 * 60 * 24);
+}
+
+function getStartOfBudgetWeek(date: Date, weekStartDay: WeekStartDayValue) {
+  const result = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0, 0);
+  const currentDay = result.getDay();
+  const desiredStart = weekStartDay === "MONDAY" ? 1 : 0;
+  const diff = (currentDay - desiredStart + 7) % 7;
+  result.setDate(result.getDate() - diff);
+  return result;
+}
+
+function getMonthWeekRanges(monthStart: Date, nextMonthStart: Date, weekStartDay: WeekStartDayValue) {
+  const ranges: Array<{ start: Date; end: Date; label: string }> = [];
+  let cursor = getStartOfBudgetWeek(monthStart, weekStartDay);
+  let weekIndex = 1;
+
+  while (cursor < nextMonthStart) {
+    const start = new Date(cursor);
+    const end = new Date(cursor);
+    end.setDate(end.getDate() + 7);
+    ranges.push({
+      start,
+      end,
+      label: `${weekIndex}주차`,
+    });
+    cursor = end;
+    weekIndex += 1;
+  }
+
+  return ranges;
+}
+
+function getBudgetMeta(type: LedgerEntryTypeValue) {
+  if (type === "INCOME") {
+    return {
+      label: "수입 목표",
+      colorClass: "text-sky-500",
+      ringClass: "stroke-sky-500",
+      trackClass: "stroke-sky-100",
+      softBgClass: "bg-sky-50",
+    };
+  }
+
+  if (type === "EXPENSE") {
+    return {
+      label: "지출 예산",
+      colorClass: "text-rose-500",
+      ringClass: "stroke-rose-500",
+      trackClass: "stroke-rose-100",
+      softBgClass: "bg-rose-50",
+    };
+  }
+
+  return {
+    label: "저축 목표",
+    colorClass: "text-emerald-600",
+    ringClass: "stroke-emerald-600",
+    trackClass: "stroke-emerald-100",
+    softBgClass: "bg-emerald-50",
+  };
+}
+
+function getTypeStatMeta(type: LedgerEntryTypeValue) {
+  if (type === "INCOME") {
+    return {
+      labelClass: "text-sky-600",
+      barClassName: "bg-sky-500",
+    };
+  }
+
+  if (type === "EXPENSE") {
+    return {
+      labelClass: "text-rose-500",
+      barClassName: "bg-rose-400",
+    };
+  }
+
+  return {
+    labelClass: "text-emerald-600",
+    barClassName: "bg-emerald-600",
+  };
+}
+
+function getDonutPalette(tone: DonutTone) {
+  if (tone === "payment") {
+    return ["#fb7185", "#f97316", "#f59e0b", "#ef4444", "#f43f5e", "#fda4af"];
+  }
+
+  return ["#0f766e", "#0284c7", "#7c3aed", "#f97316", "#e11d48", "#64748b"];
+}
+
+function buildDonutBreakdown(items: AmountBreakdownItem[], maxSegments = 5) {
+  if (items.length <= maxSegments) {
+    return items;
+  }
+
+  const total = items.reduce((sum, item) => sum + item.amount, 0);
+  const visibleItems = items.slice(0, maxSegments - 1);
+  const remainderAmount = items.slice(maxSegments - 1).reduce((sum, item) => sum + item.amount, 0);
+
+  return [
+    ...visibleItems,
+    {
+      label: "기타",
+      amount: remainderAmount,
+      percent: roundPercent(remainderAmount, total),
+    },
+  ];
+}
+
+function buildAmountBreakdown<T extends { amount: number }>(
+  entries: T[],
+  getLabel: (entry: T, index: number) => string,
+): AmountBreakdownItem[] {
+  const grouped = new Map<string, number>();
+
+  entries.forEach((entry, index) => {
+    const label = getLabel(entry, index);
+    grouped.set(label, (grouped.get(label) ?? 0) + entry.amount);
+  });
+
+  const total = Array.from(grouped.values()).reduce((sum, amount) => sum + amount, 0);
+
+  return Array.from(grouped.entries())
+    .map(([label, amount]) => ({
+      label,
+      amount,
+      percent: roundPercent(amount, total),
+    }))
+    .sort((left, right) => right.amount - left.amount);
+}
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { user } = await getSessionWithPermission(request, "USER");
+  await ensureLedgerSetup(db, user.id);
+  const { ensureLedgerBudgetPeriodForDate } = await import("~/lib/ledger-budget.server");
+
+  const url = new URL(request.url);
+  const monthToken = parseMonthToken(url.searchParams.get("month")) ?? getMonthToken(new Date());
+  const selectedFilter = parseEntryFilter(url.searchParams.get("type"));
+  const monthStart = getMonthStart(monthToken);
+  const prevMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() - 1, 1, 0, 0, 0, 0);
+  const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0, 12, 0, 0, 0);
+  const nextMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1, 0, 0, 0, 0);
+  const entrySelect = {
+    type: true,
+    amount: true,
+    usedAt: true,
+    paymentMethod: true,
+    category: {
+      select: {
+        id: true,
+        name: true,
+      },
+    },
+    tags: {
+      select: {
+        tag: {
+          select: {
+            name: true,
+          },
+        },
+      },
+    },
+  } as const;
+
+  const mapEntry = (entry: {
+    type: LedgerEntryTypeValue;
+    amount: { toString(): string } | number;
+    usedAt: Date;
+    paymentMethod: LedgerPaymentMethodValue | null;
+    category: { id: number; name: string } | null;
+    tags: Array<{ tag: { name: string } }>;
+  }) => ({
+    type: entry.type,
+    amount: Number(entry.amount),
+    usedAt: entry.usedAt.toISOString(),
+    paymentMethod: entry.paymentMethod,
+    categoryId: entry.category?.id ?? null,
+    categoryName: entry.category?.name ?? null,
+    tagNames: entry.tags.map((item) => item.tag.name),
+  });
+
+  const [entries, prevEntries, startBudgetResult, endBudgetResult] = await Promise.all([
+    db.ledgerEntry.findMany({
+      where: {
+        userId: user.id,
+        excludeFromStats: false,
+        usedAt: {
+          gte: new Date(monthStart.getFullYear(), monthStart.getMonth(), 1, 0, 0, 0, 0),
+          lt: nextMonthStart,
+        },
+      },
+      select: entrySelect,
+      orderBy: [{ usedAt: "asc" }, { id: "asc" }],
+    }),
+    db.ledgerEntry.findMany({
+      where: {
+        userId: user.id,
+        excludeFromStats: false,
+        usedAt: {
+          gte: prevMonthStart,
+          lt: new Date(monthStart.getFullYear(), monthStart.getMonth(), 1, 0, 0, 0, 0),
+        },
+      },
+      select: entrySelect,
+      orderBy: [{ usedAt: "asc" }, { id: "asc" }],
+    }),
+    ensureLedgerBudgetPeriodForDate(db, user.id, monthStart),
+    ensureLedgerBudgetPeriodForDate(db, user.id, monthEnd),
+  ]);
+
+  const budgetPeriods = Array.from(
+    new Map(
+      [startBudgetResult.period, endBudgetResult.period].map((period) => [
+        period.id,
+        {
+          id: period.id,
+          periodStartAt: period.periodStartAt.toISOString(),
+          periodEndAt: period.periodEndAt.toISOString(),
+          plans: period.plans.map((plan) => ({
+            type: plan.type,
+            totalAmount: Number(plan.totalAmount),
+            allocations: plan.allocations.map((allocation) => ({
+              categoryId: allocation.categoryId,
+              categoryName: allocation.category.name,
+              plannedAmount: Number(allocation.plannedAmount),
+              isFixed: allocation.isFixed,
+            })),
+          })),
+        } satisfies BudgetPeriodSummary,
+      ]),
+    ).values(),
+  );
+
+  const today = new Date();
+
+  return {
+    monthToken,
+    monthLabel: getMonthLabel(monthStart),
+    prevMonthToken: shiftMonthToken(monthToken, -1),
+    nextMonthToken: shiftMonthToken(monthToken, 1),
+    todayMonthToken: getMonthToken(today),
+    todayDateToken: new Intl.DateTimeFormat("sv-SE").format(today),
+    selectedFilter,
+    weekStartDay: startBudgetResult.settings.weekStartDay,
+    budgetPeriods,
+    entries: entries.map(mapEntry),
+    prevEntries: prevEntries.map(mapEntry),
+  };
+};
+
+export default function LedgerStatsPage() {
+  const {
+    monthToken,
+    monthLabel,
+    prevMonthToken,
+    nextMonthToken,
+    todayMonthToken,
+    todayDateToken,
+    selectedFilter,
+    weekStartDay,
+    budgetPeriods,
+    entries,
+    prevEntries,
+  } =
+    useLoaderData<typeof loader>();
+
+  const monthStart = useMemo(() => getMonthStart(monthToken), [monthToken]);
+  const nextMonthStart = useMemo(
+    () => new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1, 0, 0, 0, 0),
+    [monthStart],
+  );
+  const prevMonthLabel = useMemo(() => getMonthLabel(getMonthStart(prevMonthToken)), [prevMonthToken]);
+
+  const filteredEntries = useMemo(
+    () => (selectedFilter === "ALL" ? entries : entries.filter((entry) => entry.type === selectedFilter)),
+    [entries, selectedFilter],
+  );
+
+  const summary = useMemo(
+    () =>
+      entries.reduce(
+        (acc, entry) => {
+          if (entry.type === "INCOME") acc.income += entry.amount;
+          if (entry.type === "EXPENSE") acc.expense += entry.amount;
+          if (entry.type === "SAVING") acc.saving += entry.amount;
+          return acc;
+        },
+        { income: 0, expense: 0, saving: 0 },
+      ),
+    [entries],
+  );
+
+  const previousSummary = useMemo(
+    () =>
+      prevEntries.reduce(
+        (acc, entry) => {
+          if (entry.type === "INCOME") acc.income += entry.amount;
+          if (entry.type === "EXPENSE") acc.expense += entry.amount;
+          if (entry.type === "SAVING") acc.saving += entry.amount;
+          return acc;
+        },
+        { income: 0, expense: 0, saving: 0 },
+      ),
+    [prevEntries],
+  );
+
+  const budgetTargets = useMemo(() => {
+    const totals = createEmptyBudgetTotals();
+
+    for (const period of budgetPeriods) {
+      const periodStartAt = new Date(period.periodStartAt);
+      const periodEndAt = new Date(period.periodEndAt);
+      const overlapDays = getOverlapDayCount(monthStart, nextMonthStart, periodStartAt, periodEndAt);
+      if (overlapDays <= 0) {
+        continue;
+      }
+
+      const periodDayCount = getBudgetPeriodDayCount(period);
+      const overlapRatio = overlapDays / Math.max(periodDayCount, 1);
+
+      for (const plan of period.plans) {
+        totals[plan.type] += plan.totalAmount * overlapRatio;
+      }
+    }
+
+    return {
+      INCOME: Math.round(totals.INCOME),
+      EXPENSE: Math.round(totals.EXPENSE),
+      SAVING: Math.round(totals.SAVING),
+    };
+  }, [budgetPeriods, monthStart, nextMonthStart]);
+
+  const budgetCards = useMemo(() => {
+    const allTypes: LedgerEntryTypeValue[] = ["INCOME", "EXPENSE", "SAVING"];
+
+    return allTypes.map((type) => {
+      const actual = summary[type.toLowerCase() as "income" | "expense" | "saving"];
+      const target = budgetTargets[type];
+      const progressRaw = target > 0 ? Math.round((actual / target) * 100) : 0;
+      const remaining = target - actual;
+
+      return {
+        type,
+        actual,
+        target,
+        progressRaw,
+        progressValue: clampPercent(progressRaw),
+        remaining,
+        meta: getBudgetMeta(type),
+      };
+    });
+  }, [budgetTargets, summary]);
+
+  const visibleBudgetCards = useMemo(
+    () => (selectedFilter === "ALL" ? budgetCards : budgetCards.filter((card) => card.type === selectedFilter)),
+    [budgetCards, selectedFilter],
+  );
+
+  const netResult = useMemo(
+    () => summary.income - summary.expense - summary.saving,
+    [summary],
+  );
+
+  const previousNetResult = useMemo(
+    () => previousSummary.income - previousSummary.expense - previousSummary.saving,
+    [previousSummary],
+  );
+
+  const budgetNetTarget = useMemo(
+    () => budgetTargets.INCOME - budgetTargets.EXPENSE - budgetTargets.SAVING,
+    [budgetTargets],
+  );
+
+  const comparisonCards = useMemo(() => {
+    const visibleTypes: LedgerEntryTypeValue[] =
+      selectedFilter === "ALL" ? ["INCOME", "EXPENSE", "SAVING"] : [selectedFilter];
+
+    return visibleTypes.map((type) => {
+      const key = type.toLowerCase() as "income" | "expense" | "saving";
+      const current = summary[key];
+      const previous = previousSummary[key];
+      const delta = current - previous;
+      const deltaPercent = previous > 0 ? Math.round((delta / previous) * 100) : current > 0 ? 100 : 0;
+      const deltaLabel = previous > 0 ? `${deltaPercent > 0 ? "+" : ""}${deltaPercent}%` : current > 0 ? "신규" : "0%";
+      const meta = getBudgetMeta(type);
+
+      return {
+        type,
+        label: getTypeLabel(type),
+        current,
+        previous,
+        delta,
+        deltaLabel,
+        meta,
+      };
+    });
+  }, [previousSummary, selectedFilter, summary]);
+  const comparisonGraphItems = useMemo(() => {
+    const items = comparisonCards.map((card) => ({
+      label: card.label,
+      current: card.current,
+      previous: card.previous,
+      delta: card.delta,
+      deltaLabel: card.deltaLabel,
+      valueClassName: card.meta.colorClass,
+      barClassName:
+        card.type === "INCOME" ? "bg-sky-500" : card.type === "EXPENSE" ? "bg-rose-400" : "bg-emerald-600",
+    }));
+
+    if (selectedFilter === "ALL") {
+      const netDelta = netResult - previousNetResult;
+      const netDeltaPercent =
+        previousNetResult !== 0 ? Math.round((netDelta / Math.abs(previousNetResult)) * 100) : netResult !== 0 ? 100 : 0;
+
+      items.push({
+        label: "남은 금액",
+        current: netResult,
+        previous: previousNetResult,
+        delta: netDelta,
+        deltaLabel: previousNetResult !== 0 ? `${netDeltaPercent > 0 ? "+" : ""}${netDeltaPercent}%` : netResult !== 0 ? "신규" : "0%",
+        valueClassName: netResult >= 0 ? "text-sky-500" : "text-rose-500",
+        barClassName: netResult >= 0 ? "bg-sky-500" : "bg-rose-400",
+      });
+    }
+
+    return items;
+  }, [comparisonCards, netResult, previousNetResult, selectedFilter]);
+
+  const categorySections = useMemo(() => {
+    const visibleTypes: LedgerEntryTypeValue[] =
+      selectedFilter === "ALL" ? ["INCOME", "EXPENSE", "SAVING"] : [selectedFilter];
+
+    const sections = visibleTypes.map((type) => {
+      const items = buildAmountBreakdown(
+        entries.filter((entry) => entry.type === type),
+        (entry) => entry.categoryName ?? "미분류",
+      );
+      const meta = getTypeStatMeta(type);
+
+      return {
+        type,
+        title: `${getTypeLabel(type)} 카테고리`,
+        items,
+        emptyMessage: `아직 ${getTypeLabel(type)} 카테고리 내역이 없습니다.`,
+        centerLabel: getTypeLabel(type),
+        ...meta,
+      };
+    });
+
+    return selectedFilter === "ALL" ? sections.filter((section) => section.items.length > 0) : sections;
+  }, [entries, selectedFilter]);
+
+  const expenseEntries = useMemo(
+    () => filteredEntries.filter((entry) => entry.type === "EXPENSE"),
+    [filteredEntries],
+  );
+
+  const paymentStats = useMemo(
+    () =>
+      buildAmountBreakdown(expenseEntries, (entry) => getPaymentMethodLabel(entry.paymentMethod) || "미선택"),
+    [expenseEntries],
+  );
+
+  const tagStats = useMemo(() => {
+    const grouped = new Map<string, { count: number; linkedAmount: number }>();
+
+    for (const entry of filteredEntries) {
+      for (const tagName of entry.tagNames) {
+        const current = grouped.get(tagName) ?? { count: 0, linkedAmount: 0 };
+        current.count += 1;
+        current.linkedAmount += entry.amount;
+        grouped.set(tagName, current);
+      }
+    }
+
+    const totalCount = Array.from(grouped.values()).reduce((sum, item) => sum + item.count, 0);
+
+    return Array.from(grouped.entries())
+      .map(([label, value]) => ({
+        label,
+        count: value.count,
+        linkedAmount: value.linkedAmount,
+        percent: roundPercent(value.count, totalCount),
+      }))
+      .sort((left, right) => right.count - left.count || right.linkedAmount - left.linkedAmount);
+  }, [filteredEntries]);
+
+  const dailyStats = useMemo(() => {
+    const grouped = new Map<string, { income: number; expense: number; saving: number }>();
+
+    for (const entry of filteredEntries) {
+      const dateToken = entry.usedAt.slice(0, 10);
+      const current = grouped.get(dateToken) ?? { income: 0, expense: 0, saving: 0 };
+      if (entry.type === "INCOME") current.income += entry.amount;
+      if (entry.type === "EXPENSE") current.expense += entry.amount;
+      if (entry.type === "SAVING") current.saving += entry.amount;
+      grouped.set(dateToken, current);
+    }
+
+    return Array.from(grouped.entries())
+      .sort((left, right) => left[0].localeCompare(right[0]))
+      .map(([dateToken, values]) => ({
+        dateToken,
+        label: formatStatsDay(dateToken),
+        income: values.income,
+        expense: values.expense,
+        saving: values.saving,
+        selectedAmount:
+          selectedFilter === "INCOME"
+            ? values.income
+            : selectedFilter === "EXPENSE"
+              ? values.expense
+              : selectedFilter === "SAVING"
+                ? values.saving
+                : values.income + values.expense + values.saving,
+      }));
+  }, [filteredEntries, selectedFilter]);
+
+  const selectedFilterLabel = selectedFilter === "ALL" ? "전체" : getTypeLabel(selectedFilter);
+  const maxDailySelectedAmount = useMemo(
+    () => dailyStats.reduce((max, item) => Math.max(max, item.selectedAmount), 0),
+    [dailyStats],
+  );
+  const highlightDayCards = useMemo<HighlightDayCardItem[]>(() => {
+    const dailyByType: Record<LedgerEntryTypeValue, Array<{ dateLabel: string; amount: number }>> = {
+      INCOME: dailyStats.map((item) => ({ dateLabel: item.label, amount: item.income })),
+      EXPENSE: dailyStats.map((item) => ({ dateLabel: item.label, amount: item.expense })),
+      SAVING: dailyStats.map((item) => ({ dateLabel: item.label, amount: item.saving })),
+    };
+
+    const getTopItem = (type: LedgerEntryTypeValue) =>
+      dailyByType[type]
+        .filter((item) => item.amount > 0)
+        .sort((left, right) => right.amount - left.amount)[0] ?? null;
+
+    const buildItem = (
+      title: string,
+      type: LedgerEntryTypeValue,
+      toneClassName: string,
+      softBgClassName: string,
+    ) => {
+      const topItem = getTopItem(type);
+      if (!topItem) {
+        return null;
+      }
+
+      return {
+        title,
+        dateLabel: topItem.dateLabel,
+        amount: topItem.amount,
+        toneClassName,
+        softBgClassName,
+      };
+    };
+
+    if (selectedFilter === "INCOME") {
+      return [buildItem("가장 많이 번 날", "INCOME", "text-sky-500", "bg-sky-50")].filter(
+        Boolean,
+      ) as HighlightDayCardItem[];
+    }
+
+    if (selectedFilter === "EXPENSE") {
+      return [buildItem("가장 많이 쓴 날", "EXPENSE", "text-rose-500", "bg-rose-50")].filter(
+        Boolean,
+      ) as HighlightDayCardItem[];
+    }
+
+    if (selectedFilter === "SAVING") {
+      return [buildItem("가장 많이 저축한 날", "SAVING", "text-emerald-600", "bg-emerald-50")].filter(
+        Boolean,
+      ) as HighlightDayCardItem[];
+    }
+
+    return [
+      buildItem("가장 많이 번 날", "INCOME", "text-sky-500", "bg-sky-50"),
+      buildItem("가장 많이 쓴 날", "EXPENSE", "text-rose-500", "bg-rose-50"),
+      buildItem("가장 많이 저축한 날", "SAVING", "text-emerald-600", "bg-emerald-50"),
+    ].filter(Boolean) as HighlightDayCardItem[];
+  }, [dailyStats, selectedFilter]);
+  const [statsTab, setStatsTab] = useState<StatsTabValue>("SUMMARY");
+  const [categoryTab, setCategoryTab] = useState<LedgerEntryTypeValue>("EXPENSE");
+  const activeCategorySection = useMemo(() => {
+    if (selectedFilter !== "ALL") {
+      return categorySections[0] ?? null;
+    }
+
+    return categorySections.find((section) => section.type === categoryTab) ?? categorySections[0] ?? null;
+  }, [categorySections, categoryTab, selectedFilter]);
+  const categoryBudgetSections = useMemo(() => {
+    const totalsByType = new Map<LedgerEntryTypeValue, Map<number, CategoryBudgetUsageItem>>();
+
+    for (const period of budgetPeriods) {
+      const periodStartAt = new Date(period.periodStartAt);
+      const periodEndAt = new Date(period.periodEndAt);
+      const overlapDays = getOverlapDayCount(monthStart, nextMonthStart, periodStartAt, periodEndAt);
+      if (overlapDays <= 0) {
+        continue;
+      }
+
+      const overlapRatio = overlapDays / Math.max(getBudgetPeriodDayCount(period), 1);
+      for (const plan of period.plans) {
+        let sectionMap = totalsByType.get(plan.type);
+        if (!sectionMap) {
+          sectionMap = new Map();
+          totalsByType.set(plan.type, sectionMap);
+        }
+
+        for (const allocation of plan.allocations) {
+          const current = sectionMap.get(allocation.categoryId) ?? {
+            label: allocation.categoryName,
+            plannedAmount: 0,
+            actualAmount: 0,
+            remainingAmount: 0,
+            progressRaw: 0,
+            progressValue: 0,
+            isFixed: allocation.isFixed,
+          };
+          current.plannedAmount += allocation.plannedAmount * overlapRatio;
+          current.isFixed = current.isFixed || allocation.isFixed;
+          sectionMap.set(allocation.categoryId, current);
+        }
+      }
+    }
+
+    for (const entry of entries) {
+      if (!entry.categoryId) {
+        continue;
+      }
+
+      const sectionMap = totalsByType.get(entry.type);
+      if (!sectionMap) {
+        continue;
+      }
+
+      const current = sectionMap.get(entry.categoryId);
+      if (!current) {
+        continue;
+      }
+
+      current.actualAmount += entry.amount;
+    }
+
+    const visibleTypes: LedgerEntryTypeValue[] =
+      selectedFilter === "ALL" ? ["INCOME", "EXPENSE", "SAVING"] : [selectedFilter];
+
+    return visibleTypes.map((type) => {
+      const sectionMap = totalsByType.get(type) ?? new Map<number, CategoryBudgetUsageItem>();
+      const items = Array.from(sectionMap.values())
+        .map((item) => {
+          const plannedAmount = Math.round(item.plannedAmount);
+          const actualAmount = Math.round(item.actualAmount);
+          const remainingAmount = plannedAmount - actualAmount;
+          const progressRaw = plannedAmount > 0 ? Math.round((actualAmount / plannedAmount) * 100) : 0;
+
+          return {
+            ...item,
+            plannedAmount,
+            actualAmount,
+            remainingAmount,
+            progressRaw,
+            progressValue: clampPercent(progressRaw),
+          };
+        })
+        .sort((left, right) => right.plannedAmount - left.plannedAmount || right.actualAmount - left.actualAmount);
+
+      const fixedSummary = items.reduce(
+        (acc, item) => {
+          if (item.isFixed) {
+            acc.fixedPlanned += item.plannedAmount;
+            acc.fixedActual += item.actualAmount;
+          } else {
+            acc.variablePlanned += item.plannedAmount;
+            acc.variableActual += item.actualAmount;
+          }
+          return acc;
+        },
+        { fixedPlanned: 0, fixedActual: 0, variablePlanned: 0, variableActual: 0 },
+      );
+
+      return {
+        type,
+        items,
+        fixedSummary,
+      };
+    });
+  }, [budgetPeriods, entries, monthStart, nextMonthStart, selectedFilter]);
+  const activeCategoryBudgetSection = useMemo(() => {
+    if (selectedFilter !== "ALL") {
+      return categoryBudgetSections[0] ?? null;
+    }
+
+    return categoryBudgetSections.find((section) => section.type === categoryTab) ?? categoryBudgetSections[0] ?? null;
+  }, [categoryBudgetSections, categoryTab, selectedFilter]);
+  const weeklyStats = useMemo(() => {
+    const grouped = new Map<string, { start: Date; end: Date; income: number; expense: number; saving: number }>();
+
+    for (const entry of filteredEntries) {
+      const entryDate = new Date(entry.usedAt);
+      const weekStart = getStartOfBudgetWeek(entryDate, weekStartDay);
+      const key = weekStart.toISOString().slice(0, 10);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+
+      const current = grouped.get(key) ?? { start: weekStart, end: weekEnd, income: 0, expense: 0, saving: 0 };
+      if (entry.type === "INCOME") current.income += entry.amount;
+      if (entry.type === "EXPENSE") current.expense += entry.amount;
+      if (entry.type === "SAVING") current.saving += entry.amount;
+      grouped.set(key, current);
+    }
+
+    return Array.from(grouped.values())
+      .sort((left, right) => left.start.getTime() - right.start.getTime())
+      .map((item, index) => ({
+        label: `${index + 1}주차`,
+        rangeLabel: formatWeekRangeLabel(item.start, item.end),
+        income: item.income,
+        expense: item.expense,
+        saving: item.saving,
+        selectedAmount:
+          selectedFilter === "INCOME"
+            ? item.income
+            : selectedFilter === "EXPENSE"
+              ? item.expense
+              : selectedFilter === "SAVING"
+                ? item.saving
+                : item.income + item.expense + item.saving,
+      }));
+  }, [filteredEntries, selectedFilter, weekStartDay]);
+  const maxWeeklySelectedAmount = useMemo(
+    () => weeklyStats.reduce((max, item) => Math.max(max, item.selectedAmount), 0),
+    [weeklyStats],
+  );
+  const riskyCategoryItems = useMemo(() => {
+    if (!activeCategoryBudgetSection) {
+      return [];
+    }
+
+    const items = activeCategoryBudgetSection.items.filter((item) => item.plannedAmount > 0);
+    if (activeCategoryBudgetSection.type === "EXPENSE") {
+      return items
+        .filter((item) => item.progressRaw >= 80 || item.remainingAmount <= 0)
+        .sort((left, right) => left.remainingAmount - right.remainingAmount || right.progressRaw - left.progressRaw)
+        .slice(0, 5);
+    }
+
+    return items
+      .filter((item) => item.progressRaw < 100)
+      .sort((left, right) => right.remainingAmount - left.remainingAmount || left.progressRaw - right.progressRaw)
+      .slice(0, 5);
+  }, [activeCategoryBudgetSection]);
+  const weeklyGoalFocusType: LedgerEntryTypeValue = selectedFilter === "ALL" ? categoryTab : selectedFilter;
+  const weeklyGoalStats = useMemo(() => {
+    const rangeStart = new Date(monthStart.getFullYear(), monthStart.getMonth(), 1, 0, 0, 0, 0);
+    const ranges = getMonthWeekRanges(rangeStart, nextMonthStart, weekStartDay);
+    const meta = getTypeStatMeta(weeklyGoalFocusType);
+
+    return ranges.map((range) => {
+      const actuals = new Map<number, { label: string; actual: number }>();
+      const targets = new Map<number, { label: string; target: number }>();
+
+      for (const entry of entries) {
+        const usedAt = new Date(entry.usedAt);
+        if (usedAt >= range.start && usedAt < range.end && entry.type === weeklyGoalFocusType && entry.categoryId) {
+          const current = actuals.get(entry.categoryId) ?? {
+            label: entry.categoryName ?? "미분류",
+            actual: 0,
+          };
+          current.actual += entry.amount;
+          actuals.set(entry.categoryId, current);
+        }
+      }
+
+      for (const period of budgetPeriods) {
+        const periodStartAt = new Date(period.periodStartAt);
+        const periodEndAt = new Date(period.periodEndAt);
+        const overlapDays = getOverlapDayCount(range.start, range.end, periodStartAt, periodEndAt);
+        if (overlapDays <= 0) {
+          continue;
+        }
+
+        const overlapRatio = overlapDays / Math.max(getBudgetPeriodDayCount(period), 1);
+        const plan = period.plans.find((item) => item.type === weeklyGoalFocusType);
+        if (!plan) {
+          continue;
+        }
+
+        for (const allocation of plan.allocations) {
+          const current = targets.get(allocation.categoryId) ?? {
+            label: allocation.categoryName,
+            target: 0,
+          };
+          current.target += allocation.plannedAmount * overlapRatio;
+          targets.set(allocation.categoryId, current);
+        }
+      }
+      const categoryIds = new Set<number>([...targets.keys(), ...actuals.keys()]);
+
+      return {
+        label: range.label,
+        rangeLabel: formatWeekRangeLabel(range.start, new Date(range.end.getTime() - 1000 * 60 * 60 * 24)),
+        rates: Array.from(categoryIds)
+          .map((categoryId) => {
+            const actualItem = actuals.get(categoryId);
+            const targetItem = targets.get(categoryId);
+            const actual = Math.round(actualItem?.actual ?? 0);
+            const target = Math.round(targetItem?.target ?? 0);
+            const progressRaw = target > 0 ? Math.round((actual / target) * 100) : actual > 0 ? 100 : 0;
+
+            return {
+              id: String(categoryId),
+              type: weeklyGoalFocusType,
+              label: targetItem?.label ?? actualItem?.label ?? "미분류",
+              actual,
+              target,
+              progressRaw,
+              progressValue: clampPercent(progressRaw),
+              gapAmount: target - actual,
+              labelClassName: meta.labelClass,
+              barClassName: meta.barClassName,
+            } satisfies WeeklyGoalRateItem;
+          })
+          .filter((item) => item.target > 0 || item.actual > 0)
+          .sort((left, right) => right.target - left.target || right.actual - left.actual),
+      };
+    });
+  }, [budgetPeriods, categoryTab, entries, monthStart, nextMonthStart, selectedFilter, weekStartDay, weeklyGoalFocusType]);
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <div className="border-b bg-white px-2 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <Button asChild variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-700">
+            <Link to={buildLedgerMonthLink(monthToken, selectedFilter)}>
+              <ArrowLeft className="h-6 w-6" />
+            </Link>
+          </Button>
+
+          <div className="flex items-center gap-1">
+            <Button asChild variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-700">
+              <Link to={buildLedgerStatsLink(prevMonthToken, selectedFilter)}>
+                <ChevronLeft className="h-6 w-6" />
+              </Link>
+            </Button>
+            <div className="min-w-[9rem] text-center">
+              <h1 className="text-[0.96rem] font-semibold text-slate-900">통계</h1>
+              <p className="text-[0.82rem] text-slate-500">{monthLabel}</p>
+            </div>
+            <Button asChild variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-700">
+              <Link to={buildLedgerStatsLink(nextMonthToken, selectedFilter)}>
+                <ChevronRight className="h-6 w-6" />
+              </Link>
+            </Button>
+          </div>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-700">
+                <MoreVertical className="h-5 w-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem asChild>
+                  <Link to={buildLedgerMonthLink(monthToken, selectedFilter)}>달력으로</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                  <Link to={buildLedgerListLink(monthToken, selectedFilter)}>월 리스트 내역</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                  <Link to="/ledger/settings">설정</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                  <Link to={buildLedgerBudgetLink(monthToken, selectedFilter)}>이 달 예산 수정</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                  <Link to={buildLedgerStatsLink(todayMonthToken, selectedFilter)}>이번 달 통계</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                  <Link to={buildLedgerDateLink(todayDateToken, todayMonthToken, selectedFilter)}>오늘 내역</Link>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 border-b bg-white">
+        <Link
+          to={buildLedgerStatsLink(monthToken, toggleEntryFilter(selectedFilter, "INCOME"))}
+          className={cn("py-3 text-center transition-colors", selectedFilter === "INCOME" ? "bg-sky-50" : "hover:bg-slate-50")}
+        >
+          <p className="text-[0.82rem] font-medium text-slate-900">수입</p>
+          <p className="mt-1 text-[0.92rem] font-semibold text-sky-500">{formatLedgerAmount(summary.income)}</p>
+        </Link>
+        <Link
+          to={buildLedgerStatsLink(monthToken, toggleEntryFilter(selectedFilter, "EXPENSE"))}
+          className={cn("py-3 text-center transition-colors", selectedFilter === "EXPENSE" ? "bg-rose-50" : "hover:bg-slate-50")}
+        >
+          <p className="text-[0.82rem] font-medium text-slate-900">지출</p>
+          <p className="mt-1 text-[0.92rem] font-semibold text-rose-500">{formatLedgerAmount(summary.expense)}</p>
+        </Link>
+        <Link
+          to={buildLedgerStatsLink(monthToken, toggleEntryFilter(selectedFilter, "SAVING"))}
+          className={cn("py-3 text-center transition-colors", selectedFilter === "SAVING" ? "bg-emerald-50" : "hover:bg-slate-50")}
+        >
+          <p className="text-[0.82rem] font-medium text-slate-900">저축</p>
+          <p className="mt-1 text-[0.92rem] font-semibold text-emerald-600">{formatLedgerAmount(summary.saving)}</p>
+        </Link>
+      </div>
+
+      <div className="space-y-4 px-4 py-4 pb-8">
+        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[0.82rem] font-medium text-slate-900">{selectedFilterLabel} 기준</p>
+              <p className="mt-1 text-[0.72rem] text-slate-500">{filteredEntries.length}건의 내역을 보고 있어요.</p>
+            </div>
+            {selectedFilter !== "ALL" ? (
+              <Link
+                to={buildLedgerStatsLink(monthToken, "ALL")}
+                className="rounded-full border border-slate-200 px-3 py-1 text-[0.72rem] font-medium text-slate-600 transition-colors hover:bg-slate-50"
+              >
+                전체 보기
+              </Link>
+            ) : null}
+          </div>
+        </div>
+        <div className="grid grid-cols-3 overflow-hidden rounded-xl bg-slate-100 p-1">
+          {([
+            { id: "SUMMARY", label: "요약" },
+            { id: "ANALYSIS", label: "분석" },
+            { id: "FLOW", label: "흐름" },
+          ] as const).map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setStatsTab(tab.id)}
+              className={cn(
+                "rounded-lg px-2 py-2 text-[0.78rem] font-medium transition-colors",
+                statsTab === tab.id ? "bg-white text-slate-900 shadow-sm" : "text-slate-500",
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {statsTab === "SUMMARY" ? (
+          <>
+            <StatSection title="예산 진행">
+              <div className="grid gap-3 md:grid-cols-3">
+                {visibleBudgetCards.map((card) => (
+                  <BudgetRingCard
+                    key={card.type}
+                    label={card.meta.label}
+                    actual={card.actual}
+                    target={card.target}
+                    progressValue={card.progressValue}
+                    progressRaw={card.progressRaw}
+                    remaining={card.remaining}
+                    type={card.type}
+                  />
+                ))}
+              </div>
+
+              <div className="mt-3 rounded-xl bg-slate-50 px-3 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[0.78rem] font-medium text-slate-700">이번 달 남은 금액</p>
+                  <p className={cn("text-[0.88rem] font-semibold", netResult >= 0 ? "text-sky-500" : "text-rose-500")}>
+                    {formatLedgerAmount(netResult)}
+                  </p>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <p className="text-[0.72rem] text-slate-400">계획상 남은 금액</p>
+                  <p className="text-[0.78rem] font-medium text-slate-500">{formatLedgerAmount(budgetNetTarget)}</p>
+                </div>
+              </div>
+            </StatSection>
+
+            <StatSection title="이번 달 포인트">
+              <HighlightDayCardList items={highlightDayCards} emptyMessage="아직 비교할 만한 내역이 없습니다." />
+            </StatSection>
+
+            <StatSection title="전월 대비 증감" description={`${prevMonthLabel}과 비교했어요.`}>
+              <ComparisonGraphList items={comparisonGraphItems} previousLabel={prevMonthLabel} currentLabel={monthLabel} />
+            </StatSection>
+          </>
+        ) : null}
+
+        {statsTab === "ANALYSIS" ? (
+          <>
+            <StatSection title="카테고리별">
+              {selectedFilter === "ALL" && categorySections.length > 0 ? (
+                <div className="mb-4 grid grid-cols-3 overflow-hidden rounded-xl bg-slate-100 p-1">
+                  {(["INCOME", "EXPENSE", "SAVING"] as LedgerEntryTypeValue[]).map((type) => {
+                    const isActive = categoryTab === type;
+                    const meta = getTypeStatMeta(type);
+
+                    return (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => setCategoryTab(type)}
+                        className={cn(
+                          "rounded-lg px-2 py-2 text-[0.78rem] font-medium transition-colors",
+                          isActive ? `bg-white shadow-sm ${meta.labelClass}` : "text-slate-500",
+                        )}
+                      >
+                        {getTypeLabel(type)}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              {!activeCategorySection ? (
+                <EmptyState message="아직 집계된 카테고리 내역이 없습니다." />
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className={cn("text-[0.82rem] font-semibold", activeCategorySection.labelClass)}>{activeCategorySection.title}</h3>
+                    <p className="text-[0.72rem] text-slate-400">{activeCategorySection.items.length}개 카테고리</p>
+                  </div>
+                  <BreakdownDonutCard items={activeCategorySection.items} tone="category" centerLabel={activeCategorySection.centerLabel} />
+                  <AmountStatList
+                    items={activeCategorySection.items}
+                    emptyMessage={activeCategorySection.emptyMessage}
+                    barClassName={activeCategorySection.barClassName}
+                  />
+                </div>
+              )}
+            </StatSection>
+
+            <StatSection title="카테고리 예산 사용률">
+              {!activeCategoryBudgetSection || activeCategoryBudgetSection.items.length === 0 ? (
+                <EmptyState message="설정된 카테고리 예산이 없습니다." />
+              ) : (
+                <div className="space-y-3">
+                  {activeCategoryBudgetSection.items.map((item) => (
+                    <div key={item.label} className="space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-[0.82rem] font-medium text-slate-800">{item.label}</p>
+                          <p className="mt-1 text-[0.72rem] text-slate-400">
+                            {formatLedgerAmount(item.actualAmount)} / {formatLedgerAmount(item.plannedAmount)}
+                          </p>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className={cn("text-[0.82rem] font-semibold", item.remainingAmount >= 0 ? "text-slate-800" : "text-rose-500")}>
+                            {item.remainingAmount >= 0 ? formatLedgerAmount(item.remainingAmount) : `초과 ${formatLedgerAmount(Math.abs(item.remainingAmount))}`}
+                          </p>
+                          <p className="text-[0.72rem] text-slate-400">{item.progressRaw}%</p>
+                        </div>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                        <div
+                          className={cn(
+                            "h-full rounded-full",
+                            item.progressRaw > 100 ? "bg-rose-400" : item.isFixed ? "bg-violet-500" : "bg-slate-600",
+                          )}
+                          style={{ width: `${getAmountBarWidth(item.progressValue)}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </StatSection>
+
+            {activeCategoryBudgetSection?.type === "EXPENSE" ? (
+              <StatSection title="예산 위험 카테고리">
+                <BudgetRiskList
+                  type="EXPENSE"
+                  items={riskyCategoryItems}
+                  emptyMessage="지금은 위험한 지출 카테고리가 없습니다."
+                />
+              </StatSection>
+            ) : null}
+
+            {selectedFilter === "EXPENSE" && activeCategoryBudgetSection ? (
+              <StatSection title="고정비 / 변동비">
+                <FixedVariableCard
+                  fixedPlanned={activeCategoryBudgetSection.fixedSummary.fixedPlanned}
+                  fixedActual={activeCategoryBudgetSection.fixedSummary.fixedActual}
+                  variablePlanned={activeCategoryBudgetSection.fixedSummary.variablePlanned}
+                  variableActual={activeCategoryBudgetSection.fixedSummary.variableActual}
+                />
+              </StatSection>
+            ) : null}
+
+            {selectedFilter === "EXPENSE" ? (
+              <StatSection
+                title="결제수단별"
+                description="현재 지출 내역만 기준으로 계산했어요."
+              >
+                <BreakdownDonutCard items={paymentStats} tone="payment" centerLabel="지출" />
+                <AmountStatList items={paymentStats} emptyMessage="아직 지출 결제수단 내역이 없습니다." barClassName="bg-rose-400" />
+              </StatSection>
+            ) : null}
+
+            <StatSection title="태그별 사용">
+              <TagStatList items={tagStats} emptyMessage="아직 태그가 달린 내역이 없습니다." />
+            </StatSection>
+          </>
+        ) : null}
+
+        {statsTab === "FLOW" ? (
+          <>
+            <StatSection title="주간 목표 달성률">
+              {selectedFilter === "ALL" ? (
+                <div className="mb-3 grid grid-cols-3 rounded-xl bg-slate-100 p-1">
+                  {(["INCOME", "EXPENSE", "SAVING"] as const).map((type) => {
+                    const isActive = categoryTab === type;
+
+                    return (
+                      <button
+                        key={type}
+                        type="button"
+                        className={cn(
+                          "rounded-lg px-2 py-1.5 text-[0.74rem] font-medium transition-colors",
+                          isActive ? "bg-white text-slate-900 shadow-sm" : "text-slate-500",
+                        )}
+                        onClick={() => setCategoryTab(type)}
+                      >
+                        {getTypeLabel(type)}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              <WeeklyGoalCompactList items={weeklyGoalStats} emptyMessage="아직 주간 목표를 계산할 예산이 없습니다." />
+            </StatSection>
+
+            <StatSection title="주차별 흐름">
+              {weeklyStats.length === 0 ? (
+                <EmptyState message="아직 집계된 주차별 내역이 없습니다." />
+              ) : selectedFilter === "ALL" ? (
+                <div className="space-y-3">
+                  {weeklyStats.map((item) => (
+                    <div key={item.label} className="grid grid-cols-[5.5rem_1fr] gap-3 rounded-xl bg-slate-50 px-3 py-3">
+                      <div>
+                        <p className="text-[0.82rem] font-medium text-slate-700">{item.label}</p>
+                        <p className="mt-1 text-[0.68rem] text-slate-400">{item.rangeLabel}</p>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-right text-[0.72rem]">
+                        <div>
+                          <p className="text-slate-400">수입</p>
+                          <p className="mt-1 text-[0.82rem] font-semibold text-sky-500">{item.income > 0 ? formatLedgerAmount(item.income) : "-"}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400">지출</p>
+                          <p className="mt-1 text-[0.82rem] font-semibold text-rose-500">{item.expense > 0 ? formatLedgerAmount(item.expense) : "-"}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400">저축</p>
+                          <p className="mt-1 text-[0.82rem] font-semibold text-emerald-600">{item.saving > 0 ? formatLedgerAmount(item.saving) : "-"}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {weeklyStats.map((item) => {
+                    const percent = roundPercent(item.selectedAmount, maxWeeklySelectedAmount || item.selectedAmount || 1);
+                    const amountClass =
+                      selectedFilter === "INCOME" ? "text-sky-500" : selectedFilter === "EXPENSE" ? "text-rose-500" : "text-emerald-600";
+                    const barClass =
+                      selectedFilter === "INCOME" ? "bg-sky-500" : selectedFilter === "EXPENSE" ? "bg-rose-400" : "bg-emerald-600";
+
+                    return (
+                      <div key={item.label} className="rounded-xl bg-slate-50 px-3 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-[0.82rem] font-medium text-slate-700">{item.label}</p>
+                            <p className="mt-1 text-[0.68rem] text-slate-400">{item.rangeLabel}</p>
+                          </div>
+                          <p className={cn("text-[0.82rem] font-semibold", amountClass)}>{formatLedgerAmount(item.selectedAmount)}</p>
+                        </div>
+                        <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                          <div className={cn("h-full rounded-full", barClass)} style={{ width: `${getAmountBarWidth(percent)}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </StatSection>
+
+            <StatSection title="일자별 흐름">
+              {dailyStats.length === 0 ? (
+                <EmptyState message="아직 집계된 일자별 내역이 없습니다." />
+              ) : selectedFilter === "ALL" ? (
+                <div className="space-y-3">
+                  {dailyStats.map((item) => (
+                    <div key={item.dateToken} className="grid grid-cols-[5.5rem_1fr] gap-3 rounded-xl bg-slate-50 px-3 py-3">
+                      <Link to={buildLedgerDateLink(item.dateToken, monthToken, selectedFilter)} className="text-[0.82rem] font-medium text-slate-700">
+                        {item.label}
+                      </Link>
+                      <div className="grid grid-cols-3 gap-2 text-right text-[0.72rem]">
+                        <div>
+                          <p className="text-slate-400">수입</p>
+                          <p className="mt-1 text-[0.82rem] font-semibold text-sky-500">{item.income > 0 ? formatLedgerAmount(item.income) : "-"}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400">지출</p>
+                          <p className="mt-1 text-[0.82rem] font-semibold text-rose-500">{item.expense > 0 ? formatLedgerAmount(item.expense) : "-"}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400">저축</p>
+                          <p className="mt-1 text-[0.82rem] font-semibold text-emerald-600">{item.saving > 0 ? formatLedgerAmount(item.saving) : "-"}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {dailyStats.map((item) => {
+                    const percent = roundPercent(item.selectedAmount, maxDailySelectedAmount || item.selectedAmount || 1);
+                    const amountClass =
+                      selectedFilter === "INCOME" ? "text-sky-500" : selectedFilter === "EXPENSE" ? "text-rose-500" : "text-emerald-600";
+                    const barClass =
+                      selectedFilter === "INCOME" ? "bg-sky-500" : selectedFilter === "EXPENSE" ? "bg-rose-400" : "bg-emerald-600";
+
+                    return (
+                      <Link key={item.dateToken} to={buildLedgerDateLink(item.dateToken, monthToken, selectedFilter)} className="block rounded-xl bg-slate-50 px-3 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-[0.82rem] font-medium text-slate-700">{item.label}</p>
+                          <p className={cn("text-[0.82rem] font-semibold", amountClass)}>{formatLedgerAmount(item.selectedAmount)}</p>
+                        </div>
+                        <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                          <div className={cn("h-full rounded-full", barClass)} style={{ width: `${getAmountBarWidth(percent)}%` }} />
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </StatSection>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function StatSection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+      <div className="mb-4">
+        <h2 className="text-[0.92rem] font-semibold text-slate-900">{title}</h2>
+        {description ? <p className="mt-1 text-[0.72rem] text-slate-500">{description}</p> : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function AmountStatList({
+  items,
+  emptyMessage,
+  barClassName,
+}: {
+  items: AmountBreakdownItem[];
+  emptyMessage: string;
+  barClassName: string;
+}) {
+  if (items.length === 0) {
+    return <EmptyState message={emptyMessage} />;
+  }
+
+  return (
+    <div className="space-y-3">
+      {items.map((item) => (
+        <div key={item.label} className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <p className="min-w-0 truncate text-[0.82rem] font-medium text-slate-800">{item.label}</p>
+            <div className="shrink-0 text-right">
+              <p className="text-[0.82rem] font-semibold text-slate-900">{formatLedgerAmount(item.amount)}</p>
+              <p className="text-[0.72rem] text-slate-400">{item.percent}%</p>
+            </div>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+            <div className={cn("h-full rounded-full", barClassName)} style={{ width: `${getAmountBarWidth(item.percent)}%` }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TagStatList({ items, emptyMessage }: { items: TagBreakdownItem[]; emptyMessage: string }) {
+  if (items.length === 0) {
+    return <EmptyState message={emptyMessage} />;
+  }
+
+  return (
+    <div className="space-y-3">
+      {items.map((item) => (
+        <div key={item.label} className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate text-[0.82rem] font-medium text-slate-800">{item.label}</p>
+               <p className="mt-1 text-[0.72rem] text-slate-400">연결 금액 {formatLedgerAmount(item.linkedAmount)}</p>
+            </div>
+            <div className="shrink-0 text-right">
+               <p className="text-[0.82rem] font-semibold text-slate-900">{item.count}건</p>
+              <p className="text-[0.72rem] text-slate-400">{item.percent}%</p>
+            </div>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+            <div className="h-full rounded-full bg-emerald-500" style={{ width: `${getAmountBarWidth(item.percent)}%` }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HighlightDayCardList({
+  items,
+  emptyMessage,
+}: {
+  items: HighlightDayCardItem[];
+  emptyMessage: string;
+}) {
+  if (items.length === 0) {
+    return <EmptyState message={emptyMessage} />;
+  }
+
+  return (
+    <div className="grid gap-3 md:grid-cols-3">
+      {items.map((item) => (
+        <div key={item.title} className={cn("rounded-xl px-3 py-3", item.softBgClassName)}>
+          <p className="text-[0.72rem] text-slate-500">{item.title}</p>
+          <p className="mt-2 text-[0.9rem] font-semibold text-slate-900">{item.dateLabel}</p>
+          <p className={cn("mt-1 text-[0.84rem] font-semibold", item.toneClassName)}>{formatLedgerAmount(item.amount)}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BudgetRiskList({
+  type,
+  items,
+  emptyMessage,
+}: {
+  type: LedgerEntryTypeValue;
+  items: CategoryBudgetUsageItem[];
+  emptyMessage: string;
+}) {
+  if (items.length === 0) {
+    return <EmptyState message={emptyMessage} />;
+  }
+
+  const isExpense = type === "EXPENSE";
+
+  return (
+    <div className="space-y-3">
+      {items.map((item) => {
+        const statusClassName = isExpense
+          ? item.remainingAmount <= 0
+            ? "text-rose-500"
+            : "text-amber-500"
+          : item.remainingAmount > 0
+            ? "text-amber-500"
+            : "text-emerald-600";
+        const statusLabel = isExpense
+          ? item.remainingAmount < 0
+            ? `초과 ${formatLedgerAmount(Math.abs(item.remainingAmount))}`
+            : `남은 ${formatLedgerAmount(item.remainingAmount)}`
+          : item.remainingAmount > 0
+            ? `부족 ${formatLedgerAmount(item.remainingAmount)}`
+            : `초과 달성 ${formatLedgerAmount(Math.abs(item.remainingAmount))}`;
+
+        return (
+          <div key={item.label} className="rounded-xl bg-slate-50 px-3 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-[0.82rem] font-medium text-slate-800">{item.label}</p>
+                <p className="mt-1 text-[0.72rem] text-slate-400">
+                  {formatLedgerAmount(item.actualAmount)} / {formatLedgerAmount(item.plannedAmount)}
+                </p>
+              </div>
+              <div className="shrink-0 text-right">
+                <p className={cn("text-[0.82rem] font-semibold", statusClassName)}>{statusLabel}</p>
+                <p className="text-[0.72rem] text-slate-400">{item.progressRaw}%</p>
+              </div>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+              <div
+                className={cn(
+                  "h-full rounded-full",
+                  isExpense ? (item.remainingAmount <= 0 ? "bg-rose-400" : "bg-amber-400") : item.remainingAmount > 0 ? "bg-amber-400" : "bg-emerald-500",
+                )}
+                style={{ width: `${getAmountBarWidth(item.progressValue)}%` }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function WeeklyGoalCompactList({
+  items,
+  emptyMessage,
+}: {
+  items: Array<{
+    label: string;
+    rangeLabel: string;
+    rates: WeeklyGoalRateItem[];
+  }>;
+  emptyMessage: string;
+}) {
+  const visibleItems = items.filter((item) => item.rates.length > 0);
+  const [openLabels, setOpenLabels] = useState<string[]>([]);
+  if (visibleItems.length === 0) {
+    return <EmptyState message={emptyMessage} />;
+  }
+
+  return (
+    <div className="space-y-2">
+      {visibleItems.map((item) => {
+        const isOpen = openLabels.includes(item.label);
+        return (() => {
+          const totalTarget = item.rates.reduce((sum, rate) => sum + rate.target, 0);
+          const totalActual = item.rates.reduce((sum, rate) => sum + rate.actual, 0);
+          const displayBase = Math.max(totalTarget, totalActual, 1);
+
+          return (
+            <div key={item.label} className="rounded-xl bg-slate-50 px-3 py-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[0.8rem] font-medium text-slate-800">{item.label}</p>
+                  <p className="mt-1 text-[0.66rem] text-slate-400">{item.rangeLabel}</p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className="text-[0.72rem] text-slate-500">
+                    {formatLedgerAmount(totalActual)} / {formatLedgerAmount(totalTarget)}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setOpenLabels((current) =>
+                        current.includes(item.label) ? current.filter((label) => label !== item.label) : [...current, item.label],
+                      )
+                    }
+                    className="mt-1 text-[0.68rem] font-medium text-slate-500 transition-colors hover:text-slate-700"
+                  >
+                    {isOpen ? "상세 닫기" : "상세보기"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-2 h-4 overflow-hidden rounded-full bg-slate-200">
+                <div className="flex h-full w-full overflow-hidden rounded-full">
+                  {item.rates.map((rate, index) => {
+                    const width = totalTarget > 0 ? (rate.actual / displayBase) * 100 : 0;
+                    if (width <= 0) {
+                      return null;
+                    }
+
+                    return (
+                      <div
+                        key={rate.id}
+                        className={cn("h-full", WEEKLY_STACK_BAR_CLASSES[index % WEEKLY_STACK_BAR_CLASSES.length])}
+                        style={{ width: `${width}%` }}
+                        title={`${rate.label} ${roundPercent(rate.actual, totalTarget || 1)}%`}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {item.rates.map((rate) => (
+                  <span
+                    key={rate.id}
+                    className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[0.68rem] text-slate-600"
+                  >
+                    <span className={cn("font-medium", rate.labelClassName)}>{rate.label}</span>
+                    <span className="ml-1 text-slate-500">{roundPercent(rate.actual, totalTarget || 1)}%</span>
+                  </span>
+                ))}
+              </div>
+
+              {isOpen ? (
+                <div className="mt-3 space-y-3 border-t border-slate-200 pt-3">
+                  {item.rates.map((rate) => {
+                    const gapLabel =
+                      rate.type === "EXPENSE"
+                        ? rate.gapAmount >= 0
+                          ? `남은 ${formatLedgerAmount(rate.gapAmount)}`
+                          : `초과 ${formatLedgerAmount(Math.abs(rate.gapAmount))}`
+                        : rate.gapAmount >= 0
+                          ? `남은 ${formatLedgerAmount(rate.gapAmount)}`
+                          : `초과 ${formatLedgerAmount(Math.abs(rate.gapAmount))}`;
+
+                    return (
+                      <div key={rate.id} className="space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className={cn("text-[0.8rem] font-medium", rate.labelClassName)}>{rate.label}</p>
+                            <p className="mt-1 text-[0.68rem] text-slate-400">
+                              {formatLedgerAmount(rate.actual)} / {formatLedgerAmount(rate.target)}
+                            </p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-[0.78rem] font-semibold text-slate-800">{rate.progressRaw}%</p>
+                            <p className="text-[0.68rem] text-slate-400">{gapLabel}</p>
+                          </div>
+                        </div>
+                        <div className="h-3.5 overflow-hidden rounded-full bg-slate-200">
+                          <div
+                            className={cn("h-full rounded-full", rate.barClassName)}
+                            style={{ width: `${getAmountBarWidth(rate.progressValue)}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          );
+        })();
+      })}
+    </div>
+  );
+}
+
+function WeeklyGoalList({
+  items,
+  emptyMessage,
+}: {
+  items: Array<{
+    label: string;
+    rangeLabel: string;
+    rates: WeeklyGoalRateItem[];
+  }>;
+  emptyMessage: string;
+}) {
+  const visibleItems = items.filter((item) => item.rates.length > 0);
+  if (visibleItems.length === 0) {
+    return <EmptyState message={emptyMessage} />;
+  }
+
+  return (
+    <div className="space-y-3">
+      {visibleItems.map((item) => (
+        <div key={item.label} className="rounded-xl bg-slate-50 px-3 py-3">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <p className="text-[0.82rem] font-medium text-slate-800">{item.label}</p>
+            <p className="text-[0.68rem] text-slate-400">{item.rangeLabel}</p>
+          </div>
+
+          <div className="space-y-3">
+            {item.rates.map((rate) => {
+              const gapLabel =
+                rate.type === "EXPENSE"
+                  ? rate.gapAmount >= 0
+                    ? `남은 ${formatLedgerAmount(rate.gapAmount)}`
+                    : `초과 ${formatLedgerAmount(Math.abs(rate.gapAmount))}`
+                  : rate.gapAmount >= 0
+                    ? `남은 ${formatLedgerAmount(rate.gapAmount)}`
+                    : `초과 ${formatLedgerAmount(Math.abs(rate.gapAmount))}`;
+
+              return (
+                <div key={rate.id} className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className={cn("text-[0.8rem] font-medium", rate.labelClassName)}>{rate.label}</p>
+                      <p className="mt-1 text-[0.68rem] text-slate-400">
+                        {formatLedgerAmount(rate.actual)} / {formatLedgerAmount(rate.target)}
+                      </p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-[0.78rem] font-semibold text-slate-800">{rate.progressRaw}%</p>
+                      <p className="text-[0.68rem] text-slate-400">{gapLabel}</p>
+                    </div>
+                  </div>
+                  <div className="h-3.5 overflow-hidden rounded-full bg-slate-200">
+                    <div className={cn("h-full rounded-full", rate.barClassName)} style={{ width: `${getAmountBarWidth(rate.progressValue)}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function EmptyState({ message }: { message: string }) {
+  return <div className="rounded-xl bg-slate-50 px-3 py-6 text-center text-[0.82rem] text-slate-500">{message}</div>;
+}
+
+function FixedVariableCard({
+  fixedPlanned,
+  fixedActual,
+  variablePlanned,
+  variableActual,
+}: {
+  fixedPlanned: number;
+  fixedActual: number;
+  variablePlanned: number;
+  variableActual: number;
+}) {
+  const totalActual = fixedActual + variableActual;
+  const items = [
+    {
+      label: "고정비",
+      planned: fixedPlanned,
+      actual: fixedActual,
+      percent: roundPercent(fixedActual, totalActual),
+      barClassName: "bg-violet-500",
+    },
+    {
+      label: "변동비",
+      planned: variablePlanned,
+      actual: variableActual,
+      percent: roundPercent(variableActual, totalActual),
+      barClassName: "bg-slate-600",
+    },
+  ];
+
+  return (
+    <div className="space-y-3">
+      {items.map((item) => (
+        <div key={item.label} className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[0.82rem] font-medium text-slate-800">{item.label}</p>
+              <p className="mt-1 text-[0.72rem] text-slate-400">예산 {formatLedgerAmount(item.planned)}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[0.82rem] font-semibold text-slate-900">{formatLedgerAmount(item.actual)}</p>
+              <p className="text-[0.72rem] text-slate-400">{item.percent}%</p>
+            </div>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+            <div className={cn("h-full rounded-full", item.barClassName)} style={{ width: `${getAmountBarWidth(item.percent)}%` }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ComparisonGraphList({
+  items,
+  previousLabel,
+  currentLabel,
+}: {
+  items: Array<{
+    label: string;
+    current: number;
+    previous: number;
+    delta: number;
+    deltaLabel: string;
+    valueClassName: string;
+    barClassName: string;
+  }>;
+  previousLabel: string;
+  currentLabel: string;
+}) {
+  const maxAmount = items.reduce((max, item) => Math.max(max, Math.abs(item.current), Math.abs(item.previous)), 0) || 1;
+
+  return (
+    <div className="space-y-4">
+      {items.map((item) => {
+        const previousWidth = Math.max((Math.abs(item.previous) / maxAmount) * 100, item.previous === 0 ? 0 : 8);
+        const currentWidth = Math.max((Math.abs(item.current) / maxAmount) * 100, item.current === 0 ? 0 : 8);
+
+        return (
+          <div key={item.label} className="rounded-xl bg-slate-50 px-3 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[0.82rem] font-medium text-slate-800">{item.label}</p>
+              <div className="text-right">
+                <p className={cn("text-[0.78rem] font-semibold", item.delta === 0 ? "text-slate-500" : item.valueClassName)}>
+                  {formatSignedLedgerAmount(item.delta)}
+                </p>
+                <p className="text-[0.68rem] text-slate-400">{item.deltaLabel}</p>
+              </div>
+            </div>
+
+            <div className="mt-3 space-y-2">
+              <div className="flex items-center gap-3">
+                <p className="w-16 shrink-0 text-[0.68rem] text-slate-400">{previousLabel}</p>
+                <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
+                  <div className="h-full rounded-full bg-slate-400" style={{ width: `${previousWidth}%` }} />
+                </div>
+                <p className="w-24 shrink-0 text-right text-[0.72rem] font-medium text-slate-600">{formatComparisonAmount(item.previous)}</p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <p className="w-16 shrink-0 text-[0.68rem] text-slate-400">{currentLabel}</p>
+                <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
+                  <div className={cn("h-full rounded-full", item.barClassName)} style={{ width: `${currentWidth}%` }} />
+                </div>
+                <p className={cn("w-24 shrink-0 text-right text-[0.72rem] font-semibold", item.valueClassName)}>
+                  {formatComparisonAmount(item.current)}
+                </p>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function BreakdownDonutCard({
+  items,
+  tone,
+  centerLabel,
+}: {
+  items: AmountBreakdownItem[];
+  tone: DonutTone;
+  centerLabel: string;
+}) {
+  if (items.length === 0) {
+    return null;
+  }
+
+  const totalAmount = items.reduce((sum, item) => sum + item.amount, 0);
+  const donutItems = buildDonutBreakdown(items);
+  const palette = getDonutPalette(tone);
+  let currentPercent = 0;
+  const gradientStops = donutItems
+    .map((item, index) => {
+      const start = currentPercent;
+      currentPercent += item.percent;
+      return `${palette[index % palette.length]} ${start}% ${currentPercent}%`;
+    })
+    .join(", ");
+
+  return (
+    <div className="mb-4 rounded-xl bg-slate-50 px-3 py-3">
+      <div className="flex items-center gap-4">
+        <div className="relative h-28 w-28 shrink-0">
+          <div
+            className="h-full w-full rounded-full"
+            style={{
+              background: gradientStops.length > 0 ? `conic-gradient(${gradientStops})` : "#e2e8f0",
+            }}
+          />
+          <div className="absolute inset-[18%] flex flex-col items-center justify-center rounded-full bg-white text-center">
+            <p className="text-[0.68rem] text-slate-400">{centerLabel}</p>
+            <p className="mt-1 text-[0.78rem] font-semibold text-slate-900">{formatLedgerAmount(totalAmount)}</p>
+          </div>
+        </div>
+
+        <div className="min-w-0 flex-1 space-y-2">
+          {donutItems.map((item, index) => (
+            <div key={item.label} className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: palette[index % palette.length] }}
+                />
+                <p className="truncate text-[0.78rem] font-medium text-slate-700">{item.label}</p>
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="text-[0.78rem] font-semibold text-slate-900">{item.percent}%</p>
+                <p className="text-[0.68rem] text-slate-400">{formatLedgerAmount(item.amount)}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BudgetRingCard({
+  label,
+  actual,
+  target,
+  progressValue,
+  progressRaw,
+  remaining,
+  type,
+}: {
+  label: string;
+  actual: number;
+  target: number;
+  progressValue: number;
+  progressRaw: number;
+  remaining: number;
+  type: LedgerEntryTypeValue;
+}) {
+  const meta = getBudgetMeta(type);
+  const radius = 36;
+  const circumference = 2 * Math.PI * radius;
+  const strokeOffset = circumference - (circumference * progressValue) / 100;
+  const isExpenseOverBudget = type === "EXPENSE" && remaining < 0;
+  const progressLabel = type === "EXPENSE" ? "사용률" : "달성률";
+  const remainingLabel =
+    type === "EXPENSE"
+      ? remaining >= 0
+        ? `남은 ${formatLedgerAmount(remaining)}`
+        : `초과 ${formatLedgerAmount(Math.abs(remaining))}`
+      : remaining >= 0
+        ? `남은 ${formatLedgerAmount(remaining)}`
+        : `초과 ${formatLedgerAmount(Math.abs(remaining))}`;
+
+  return (
+    <div
+      className={cn(
+        "rounded-2xl border border-slate-200 px-3 py-3",
+        meta.softBgClass,
+        isExpenseOverBudget && "border-rose-300 bg-rose-100/70",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[0.78rem] font-medium text-slate-700">{label}</p>
+          <p className={cn("mt-1 text-[0.92rem] font-semibold", meta.colorClass)}>{formatLedgerAmount(actual)}</p>
+          <p className="mt-1 text-[0.72rem] text-slate-500">목표 {formatLedgerAmount(target)}</p>
+          <p className="mt-1 text-[0.72rem] text-slate-400">{remainingLabel}</p>
+          {isExpenseOverBudget ? (
+            <p className="mt-1 text-[0.72rem] font-medium text-rose-600">예산을 초과했어요. 지출을 줄여보세요.</p>
+          ) : null}
+        </div>
+
+        <div className="relative h-24 w-24 shrink-0">
+          <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90">
+            <circle
+              cx="50"
+              cy="50"
+              r={radius}
+              fill="none"
+              strokeWidth="10"
+              className={cn("transition-colors", meta.trackClass)}
+            />
+            <circle
+              cx="50"
+              cy="50"
+              r={radius}
+              fill="none"
+              strokeWidth="10"
+              strokeLinecap="round"
+              strokeDasharray={circumference}
+              strokeDashoffset={strokeOffset}
+              className={cn("transition-all", meta.ringClass)}
+            />
+          </svg>
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+            <p className={cn("text-[0.88rem] font-semibold", isExpenseOverBudget ? "text-rose-600" : "text-slate-900")}>
+              {progressRaw}%
+            </p>
+            <p className={cn("text-[0.68rem]", isExpenseOverBudget ? "text-rose-500" : "text-slate-400")}>
+              {progressLabel}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+

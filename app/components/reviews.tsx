@@ -6,6 +6,16 @@ import { Textarea } from "./ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { format } from "date-fns";
 
+type ReviewItem = {
+  id: number;
+  rating: number;
+  comment: string | null;
+  createdAt: string | Date;
+  user: {
+    name: string;
+  };
+};
+
 // 별점 표시 컴포넌트
 function StarRating({ rating }: { rating: number }) {
   return (
@@ -21,7 +31,7 @@ function StarRating({ rating }: { rating: number }) {
 }
 
 // 리뷰 목록을 보여주는 컴포넌트
-export function ReviewList({ reviews }: { reviews: any[] }) {
+export function ReviewList({ reviews }: { reviews: ReviewItem[] }) {
   if (reviews.length === 0) {
     return (
       <div className="text-center py-8 text-muted-foreground">
@@ -55,7 +65,7 @@ export function ReviewList({ reviews }: { reviews: any[] }) {
 
 // 리뷰 작성 폼 컴포넌트
 export function ReviewForm({ eventId }: { eventId: string }) {
-  const fetcher = useFetcher();
+  const fetcher = useFetcher<{ error?: string }>();
   const [rating, setRating] = useState(0);
   const [hoverRating, setHoverRating] = useState(0);
   const isSubmitting = fetcher.state !== 'idle';

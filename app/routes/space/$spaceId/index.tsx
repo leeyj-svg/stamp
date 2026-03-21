@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLoaderData, Form, useActionData } from "react-router";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { db } from "~/lib/db.server";
@@ -7,25 +7,50 @@ import GalaxyMessageCard from "~/components/GalaxyMessageCard";
 import SpaceBackground from "~/components/SpaceBackground";
 import SpaceAlbum from "~/components/SpaceAlbum";
 import AlbumBackground from "~/components/AlbumBackground";
-import type { JsonValue } from "@prisma/client/runtime/library";
 import { FolderOpen } from "@phosphor-icons/react";
 import { FolderClosed } from "lucide-react";
+import { parseSpaceAiStyle, type SpacePost } from "~/lib/space-post";
 
 // 🔐 [Action] 비밀번호 확인 (손님용)
 export async function action({ request, params }: ActionFunctionArgs) {
+    if (!params.spaceId) {
+        throw new Response("Not Found", { status: 404 });
+    }
+
     const formData = await request.formData();
     const intent = formData.get("intent");
 
     // ✨ 1. 위치 저장 로직 (드래그 앤 드롭 저장)
     if (intent === "move_post") {
+        const { user } = await getSession(request);
         const postId = Number(formData.get("postId"));
         const x = Number(formData.get("x"));
         const y = Number(formData.get("y"));
 
-        const post = await db.memoryPost.findUnique({ where: { id: postId } });
-        if (!post) return { success: false };
+        if (!user || Number.isNaN(postId) || Number.isNaN(x) || Number.isNaN(y)) {
+            return { success: false };
+        }
 
-        const currentStyle = (post.aiStyle as any) || {};
+        const post = await db.memoryPost.findUnique({
+            where: { id: postId },
+            select: {
+                id: true,
+                spaceId: true,
+                aiStyle: true,
+                space: {
+                    select: {
+                        userId: true,
+                    },
+                },
+            },
+        });
+        if (!post) return { success: false };
+        if (post.spaceId !== params.spaceId) return { success: false };
+
+        const canEdit = user.role === "ADMIN" || user.id === post.space.userId;
+        if (!canEdit) return { success: false };
+
+        const currentStyle = parseSpaceAiStyle(post.aiStyle);
 
         await db.memoryPost.update({
             where: { id: postId },
@@ -64,6 +89,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
 // 📦 [Loader] 기존과 동일
 export async function loader({ request, params }: LoaderFunctionArgs) {
     const { user } = await getSession(request);
+    if (!params.spaceId) throw new Response("Not Found", { status: 404 });
     const space = await db.memorySpace.findUnique({ where: { id: params.spaceId } });
     if (!space) throw new Response("Not Found", { status: 404 });
 
@@ -79,7 +105,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     const isAdmin = user?.role === "ADMIN";
     const isOwner = user && user.id === space.userId;
 
-    let initialPosts: { id: number; spaceId: string; type: string; content: string | null; mediaUrl: string | null; writerId: string | null; nickname: string; aiStyle: JsonValue | null; password: string | null; createdAt: Date; }[] = [];
+    let initialPosts: SpacePost[] = [];
     if (isAdmin || (isDatePassed && isOwner)) {
         initialPosts = await db.memoryPost.findMany({
             where: { spaceId: params.spaceId },
@@ -100,17 +126,17 @@ export default function SpaceMain() {
     // ✨ [모두 펴기] 상태 관리
     const [globalCardState, setGlobalCardState] = useState<0 | 1 | 2>(0);
     const [isMobile, setIsMobile] = useState(false);
-    const unlockedPosts = (isAdmin || (isDatePassed && isOwner))
+    const unlockedPosts: SpacePost[] | null = (isAdmin || (isDatePassed && isOwner))
         ? initialPosts
-        : (actionData && 'posts' in actionData ? actionData.posts : null);
-    useState(() => {
+        : (actionData && "posts" in actionData && Array.isArray(actionData.posts) ? actionData.posts : null);
+    useEffect(() => {
         if (typeof window !== "undefined") {
             const checkMobile = () => setIsMobile(window.innerWidth < 768);
             checkMobile();
             window.addEventListener("resize", checkMobile);
             return () => window.removeEventListener("resize", checkMobile);
         }
-    });
+    }, []);
     const isLocked = !unlockedPosts;
     const canEdit = !!(isAdmin || (isDatePassed && isOwner));
 
@@ -182,9 +208,9 @@ export default function SpaceMain() {
     }
 
     // 🔓 잠금 해제됨
-    const posts = unlockedPosts as any[];
-    const messages = posts.filter((p: any) => p.type === "MESSAGE");
-    const photos = posts.filter((p: any) => p.type === "ALBUM");
+    const posts = unlockedPosts ?? [];
+    const messages = posts.filter((post) => post.type === "MESSAGE");
+    const photos = posts.filter((post) => post.type === "ALBUM");
     const toggleOpenAll = () => {
         // 현재 상태가 1(펴짐)이면 -> 2(접기)로 변경
         // 그 외엔 -> 1(펴기)로 변경
@@ -288,8 +314,8 @@ export default function SpaceMain() {
     );
 }
 
-function MobileMessageCard({ post }: { post: any }) {
-    const aiData = (post.aiStyle as any) || {};
+function MobileMessageCard({ post }: { post: SpacePost }) {
+    const aiData = parseSpaceAiStyle(post.aiStyle);
 
     // 테마 색상 추출 (기존 로직 재사용하거나 단순화)
     let themeColor = "border-yellow-200 bg-yellow-50/10";

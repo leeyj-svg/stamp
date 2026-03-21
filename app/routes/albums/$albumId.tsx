@@ -1,4 +1,4 @@
-import { Form, Link, useLoaderData, type LoaderFunctionArgs } from "react-router";
+﻿import { Form, Link, useLoaderData, type LoaderFunctionArgs } from "react-router";
 import { Prisma } from "@prisma/client";
 import { useState } from "react";
 import { Funnel } from "lucide-react";
@@ -136,9 +136,7 @@ export default function AlbumDetailPage() {
       <div className="flex items-center justify-between gap-2">
         <div>
           <h1 className="text-2xl font-bold">{album.name}</h1>
-          <p className="text-sm text-muted-foreground">
-            전체 {totalCount}장 · 현재 {filteredCount}장
-          </p>
+          <p className="text-sm text-muted-foreground">전체 {totalCount}장 중 현재 {filteredCount}장</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" asChild>
@@ -156,15 +154,15 @@ export default function AlbumDetailPage() {
           variant="outline"
           size="icon"
           onClick={() => setShowFilters((prev) => !prev)}
-          aria-label={showFilters ? "검색/정렬/필터 숨기기" : "검색/정렬/필터 보기"}
-          title={showFilters ? "검색/정렬/필터 숨기기" : "검색/정렬/필터 보기"}
+          aria-label={showFilters ? "검색/정렬/필터 닫기" : "검색/정렬/필터 보기"}
+          title={showFilters ? "검색/정렬/필터 닫기" : "검색/정렬/필터 보기"}
         >
           <Funnel className="h-4 w-4" />
         </Button>
         {hasActiveFilter && (
           <Badge variant="secondary" className="gap-1">
             <Funnel className="h-3 w-3" />
-            적용중
+            적용 중
           </Badge>
         )}
       </div>
@@ -219,9 +217,7 @@ export default function AlbumDetailPage() {
 
       {photos.length === 0 ? (
         <Card>
-          <CardContent className="py-10 text-center text-muted-foreground">
-            조건에 맞는 사진이 없습니다.
-          </CardContent>
+          <CardContent className="py-10 text-center text-muted-foreground">조건에 맞는 사진이 없습니다.</CardContent>
         </Card>
       ) : (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
@@ -231,9 +227,7 @@ export default function AlbumDetailPage() {
                 <img src={photo.imageUrl} alt={photo.caption || "album photo"} className="h-full w-full object-cover" />
               </div>
               <CardHeader className="p-3">
-                <CardTitle className="line-clamp-2 text-sm font-semibold">
-                  {photo.caption || "설명 없음"}
-                </CardTitle>
+                <CardTitle className="line-clamp-2 text-sm font-semibold">{photo.caption || "설명 없음"}</CardTitle>
                 <div className="flex items-center gap-1 pt-1">
                   <Badge variant={photo.uploadedByUserId ? "default" : "secondary"}>
                     {photo.uploadedByUserId ? "회원" : "비회원"}
@@ -242,9 +236,7 @@ export default function AlbumDetailPage() {
                 <p className="text-xs text-muted-foreground">
                   업로더 {photo.uploadedByUser?.name || photo.uploaderName || "익명"}
                 </p>
-                <p className="text-xs text-muted-foreground">
-                  등록 {new Date(photo.createdAt).toLocaleString()}
-                </p>
+                <p className="text-xs text-muted-foreground">등록 {new Date(photo.createdAt).toLocaleString()}</p>
                 {photo.takenAt && (
                   <p className="text-xs text-muted-foreground">촬영 {new Date(photo.takenAt).toLocaleDateString()}</p>
                 )}

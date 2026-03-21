@@ -12,6 +12,7 @@ import {
   ShoppingCart,
   Settings,
   User,
+  Wallet,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -167,6 +168,14 @@ function BottomNav({ user }: { user: LoaderData["user"] }) {
 
                 <SheetClose asChild>
                   <Button variant="outline" asChild className="justify-start">
+                    <Link to="/ledger" className="text-gray-800">
+                      <Wallet className="mr-2 h-5 w-5 text-gray-600" /> 내 가계부
+                    </Link>
+                  </Button>
+                </SheetClose>
+
+                <SheetClose asChild>
+                  <Button variant="outline" asChild className="justify-start">
                     <Link to="/mypage" className="text-gray-800">
                       <Settings className="mr-2 h-5 w-5 text-gray-600" /> 내정보 보기
                     </Link>
@@ -194,6 +203,8 @@ function BottomNav({ user }: { user: LoaderData["user"] }) {
 
 export default function MobileLayout() {
   const { user, toastMessage } = useLoaderData<LoaderData>();
+  const { pathname } = useLocation();
+  const hideChrome = pathname.startsWith("/ledger");
 
   useEffect(() => {
     if (!toastMessage) return;
@@ -209,12 +220,12 @@ export default function MobileLayout() {
   }, [toastMessage]);
 
   return (
-    <div className="max-w-md mx-auto bg-gray-50 min-h-screen flex flex-col">
-      <Header />
+    <div className={hideChrome ? "min-h-screen bg-white flex flex-col" : "max-w-md mx-auto bg-gray-50 min-h-screen flex flex-col"}>
+      {!hideChrome && <Header />}
       <main className="flex-1">
         <Outlet />
       </main>
-      <BottomNav user={user} />
+      {!hideChrome && <BottomNav user={user} />}
       <Toaster richColors />
     </div>
   );
