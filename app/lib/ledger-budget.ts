@@ -4,6 +4,11 @@ export type LedgerPeriodBasisValue = "CALENDAR" | "PAYDAY";
 export type LedgerBudgetTotals = Record<LedgerEntryTypeValue, number>;
 export type LedgerWeekStartDayValue = "SUNDAY" | "MONDAY";
 export type LedgerWeekCarryModeValue = "NONE" | "AUTO" | "MANUAL";
+export type LedgerBudgetAllocationLike = {
+  categoryId: number;
+  plannedAmount: number;
+  isFixed?: boolean;
+};
 
 export const LEDGER_BUDGET_TYPE_ORDER: LedgerEntryTypeValue[] = ["EXPENSE", "INCOME", "SAVING"];
 export const LEDGER_BUDGET_TEMPLATE_LABEL = "기본 예산 템플릿";
@@ -125,5 +130,38 @@ export function getBudgetScopeAmount(
   }
 
   return amount;
+}
+
+export function getFixedBudgetAllocationAmount(
+  type: LedgerEntryTypeValue,
+  allocations: LedgerBudgetAllocationLike[],
+) {
+  if (type !== "EXPENSE") {
+    return 0;
+  }
+
+  return allocations.reduce((sum, allocation) => {
+    return allocation.isFixed ? sum + allocation.plannedAmount : sum;
+  }, 0);
+}
+
+export function getBudgetDisplayTotalAmount(
+  type: LedgerEntryTypeValue,
+  totalAmount: number,
+  allocations: LedgerBudgetAllocationLike[],
+) {
+  if (type !== "EXPENSE") {
+    return totalAmount;
+  }
+
+  return Math.max(0, totalAmount - getFixedBudgetAllocationAmount(type, allocations));
+}
+
+export function getFixedExpenseCategoryIds(allocations: LedgerBudgetAllocationLike[]) {
+  return new Set(
+    allocations
+      .filter((allocation) => allocation.isFixed)
+      .map((allocation) => allocation.categoryId),
+  );
 }
 

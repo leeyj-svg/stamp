@@ -4,9 +4,11 @@ import {
   LEDGER_BUDGET_TEMPLATE_LABEL,
   LEDGER_BUDGET_TYPE_ORDER,
   createEmptyBudgetTotals,
+  getBudgetDisplayTotalAmount,
   getBudgetScopeAmount,
   getBudgetPeriodDayCount,
   getBudgetWeekRanges,
+  getFixedExpenseCategoryIds,
   type LedgerBudgetTotals,
   type LedgerWeekCarryModeValue,
   type LedgerWeekStartDayValue,
@@ -552,6 +554,26 @@ async function resolveCurrentLedgerWeekBudgetContext(
     return null;
   }
 
+  const displayTotalAmount = getBudgetDisplayTotalAmount(
+    type,
+    Number(plan.totalAmount),
+    plan.allocations.map((allocation) => ({
+      categoryId: allocation.categoryId,
+      plannedAmount: Number(allocation.plannedAmount),
+      isFixed: allocation.isFixed,
+    })),
+  );
+  const fixedExpenseCategoryIds =
+    type === "EXPENSE"
+      ? getFixedExpenseCategoryIds(
+          plan.allocations.map((allocation) => ({
+            categoryId: allocation.categoryId,
+            plannedAmount: Number(allocation.plannedAmount),
+            isFixed: allocation.isFixed,
+          })),
+        )
+      : new Set<number>();
+
   const periodStartAt = new Date(period.periodStartAt);
   const periodEndAt = new Date(period.periodEndAt);
   const weekRanges = getBudgetWeekRanges(periodStartAt, periodEndAt, settings.weekStartDay as LedgerWeekStartDayValue);
@@ -564,7 +586,7 @@ async function resolveCurrentLedgerWeekBudgetContext(
   await syncLedgerBudgetWeeks(
     db,
     plan.id,
-    Number(plan.totalAmount),
+    displayTotalAmount,
     periodStartAt,
     periodEndAt,
     settings.weekStartDay as LedgerWeekStartDayValue,
@@ -598,6 +620,7 @@ async function resolveCurrentLedgerWeekBudgetContext(
     },
     select: {
       amount: true,
+      categoryId: true,
       usedAt: true,
     },
     orderBy: { usedAt: "asc" },
@@ -611,11 +634,27 @@ async function resolveCurrentLedgerWeekBudgetContext(
     const range = weekRanges[index];
     const fullSpent = statsEntries.reduce((sum, entry) => {
       const usedAt = new Date(entry.usedAt);
-      return usedAt >= range.start && usedAt < range.end ? sum + Number(entry.amount) : sum;
+      if (usedAt < range.start || usedAt >= range.end) {
+        return sum;
+      }
+
+      if (type === "EXPENSE" && entry.categoryId !== null && fixedExpenseCategoryIds.has(entry.categoryId)) {
+        return sum;
+      }
+
+      return sum + Number(entry.amount);
     }, 0);
     const toDateSpent = statsEntries.reduce((sum, entry) => {
       const usedAt = new Date(entry.usedAt);
-      return usedAt >= range.start && usedAt < nextDay ? sum + Number(entry.amount) : sum;
+      if (usedAt < range.start || usedAt >= nextDay) {
+        return sum;
+      }
+
+      if (type === "EXPENSE" && entry.categoryId !== null && fixedExpenseCategoryIds.has(entry.categoryId)) {
+        return sum;
+      }
+
+      return sum + Number(entry.amount);
     }, 0);
 
     fullSpentByWeek.set(weekIndex, fullSpent);

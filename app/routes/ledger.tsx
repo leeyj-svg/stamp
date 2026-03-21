@@ -13,7 +13,13 @@ import {
 } from "~/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover";
 import { getSessionWithPermission } from "~/lib/auth.server";
-import { getBudgetPeriodDayCount, getBudgetScopeAmount, getBudgetWeekRanges } from "~/lib/ledger-budget";
+import {
+  getBudgetDisplayTotalAmount,
+  getBudgetPeriodDayCount,
+  getBudgetScopeAmount,
+  getBudgetWeekRanges,
+  getFixedExpenseCategoryIds,
+} from "~/lib/ledger-budget";
 import {
   applyManualCarryToCurrentLedgerWeek,
   ensureLedgerBudgetPeriodForDate,
@@ -60,6 +66,7 @@ type BudgetPeriodSummary = {
     allocations: Array<{
       categoryId: number;
       plannedAmount: number;
+      isFixed: boolean;
     }>;
   }>;
 };
@@ -288,6 +295,28 @@ function buildLedgerListLink(
   return `/ledger/list?${params.toString()}`;
 }
 
+function buildLedgerWeekListLink(
+  monthToken: string,
+  filter: EntryFilterValue,
+  selectedDisplayOptions: BudgetDisplayOption[],
+  showCurrentWeekBudget = false,
+  selectedCategoryIds: number[] = [],
+) {
+  const params = new URLSearchParams({ month: monthToken });
+  if (filter !== "ALL") {
+    params.set("type", filter);
+  }
+
+  const budgetQuery = buildBudgetQuery(selectedDisplayOptions, showCurrentWeekBudget, selectedCategoryIds);
+  if (budgetQuery) {
+    for (const [key, value] of new URLSearchParams(budgetQuery)) {
+      params.set(key, value);
+    }
+  }
+
+  return `/ledger/weeks?${params.toString()}`;
+}
+
 function toggleEntryFilter(currentFilter: EntryFilterValue, nextFilter: LedgerEntryTypeValue): EntryFilterValue {
   return currentFilter === nextFilter ? "ALL" : nextFilter;
 }
@@ -315,6 +344,16 @@ function formatBudgetRemainingText(amount: number) {
   }
 
   return absoluteAmount;
+}
+
+function getCurrentWeekBudgetInlineLabel(type: LedgerEntryTypeValue, amount: number) {
+  const valueText = formatLedgerAmount(Math.abs(amount));
+
+  if (type === "EXPENSE") {
+    return amount < 0 ? `초과 ${valueText}` : `남은 ${valueText}`;
+  }
+
+  return `달성 ${formatLedgerAmount(amount)}`;
 }
 
 function getBudgetDisplayAmount(type: LedgerEntryTypeValue, budgetAmount: number, actualAmount: number) {
@@ -469,6 +508,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           allocations: plan.allocations.map((allocation) => ({
             categoryId: allocation.categoryId,
             plannedAmount: Number(allocation.plannedAmount),
+            isFixed: allocation.isFixed,
           })),
         })),
       });
@@ -664,6 +704,15 @@ export default function LedgerPage() {
         continue;
       }
 
+      const displayTotalAmount = getBudgetDisplayTotalAmount(
+        budgetFocusType,
+        plan.totalAmount,
+        plan.allocations,
+      );
+      if (displayTotalAmount <= 0) {
+        continue;
+      }
+
       const periodStartAt = new Date(period.periodStartAt);
       const periodEndAt = new Date(period.periodEndAt);
       const weekRanges = getBudgetWeekRanges(periodStartAt, periodEndAt, settings.weekStartDay);
@@ -672,18 +721,33 @@ export default function LedgerPage() {
       }
 
       const dayCount = getBudgetPeriodDayCount(period);
-      const fallbackPlannedAmount = getBudgetScopeAmount(plan.totalAmount, "WEEK", dayCount, weekRanges.length);
+      const fallbackPlannedAmount = getBudgetScopeAmount(displayTotalAmount, "WEEK", dayCount, weekRanges.length);
       const weekRowByIndex = new Map(plan.weeks.map((week) => [week.weekIndex, week]));
+      const fixedExpenseCategoryIds =
+        budgetFocusType === "EXPENSE" ? getFixedExpenseCategoryIds(plan.allocations) : new Set<number>();
       let rollingCarry = 0;
 
       for (let index = 0; index < weekRanges.length; index += 1) {
         const weekIndex = index + 1;
         const range = weekRanges[index];
         const weekRow = weekRowByIndex.get(weekIndex);
-        const plannedAmount = Number(weekRow?.plannedAmount ?? fallbackPlannedAmount);
+        const plannedAmount =
+          budgetFocusType === "EXPENSE" ? fallbackPlannedAmount : Number(weekRow?.plannedAmount ?? fallbackPlannedAmount);
         const spentAmount = budgetStatsEntries.reduce((sum, entry) => {
           const usedAt = new Date(entry.usedAt);
-          return usedAt >= range.start && usedAt < range.end ? sum + entry.amount : sum;
+          if (usedAt < range.start || usedAt >= range.end) {
+            return sum;
+          }
+
+          if (
+            budgetFocusType === "EXPENSE" &&
+            entry.categoryId !== null &&
+            fixedExpenseCategoryIds.has(entry.categoryId)
+          ) {
+            return sum;
+          }
+
+          return sum + entry.amount;
         }, 0);
 
         const carryInAmount =
@@ -774,6 +838,16 @@ export default function LedgerPage() {
         continue;
       }
 
+      const displayTotalAmount = getBudgetDisplayTotalAmount(
+        budgetFocusType,
+        matchingPlan.totalAmount,
+        matchingPlan.allocations,
+      );
+      if (displayTotalAmount <= 0) {
+        budgetMap.set(currentDateToken, { day: null, week: null, month: null });
+        continue;
+      }
+
       const periodStartAt = new Date(matchingPeriod.periodStartAt);
       const periodEndAt = new Date(matchingPeriod.periodEndAt);
       const periodDayCount = getBudgetPeriodDayCount({
@@ -784,18 +858,28 @@ export default function LedgerPage() {
       const weekRange =
         weekRanges.find((range) => currentDate >= range.start && currentDate < range.end) ?? { start: periodStartAt, end: periodEndAt };
       const weekCount = Math.max(weekRanges.length, 1);
+      const fixedExpenseCategoryIds =
+        budgetFocusType === "EXPENSE" ? getFixedExpenseCategoryIds(matchingPlan.allocations) : new Set<number>();
 
       const getBudgetAmount = (scope: "MONTH" | "WEEK" | "DAY") => {
-        if (matchingPlan.totalAmount <= 0) {
+        if (displayTotalAmount <= 0) {
           return 0;
         }
 
-        return getBudgetScopeAmount(matchingPlan.totalAmount, scope, periodDayCount, weekCount);
+        return getBudgetScopeAmount(displayTotalAmount, scope, periodDayCount, weekCount);
       };
 
       const getSpentAmount = (scope: "MONTH" | "WEEK" | "DAY") => {
         return budgetStatsEntries.reduce((sum, entry) => {
           const usedAt = new Date(entry.usedAt);
+          if (
+            budgetFocusType === "EXPENSE" &&
+            entry.categoryId !== null &&
+            fixedExpenseCategoryIds.has(entry.categoryId)
+          ) {
+            return sum;
+          }
+
           if (scope === "DAY") {
             return usedAt >= currentDateStart && usedAt < nextDate ? sum + entry.amount : sum;
           }
@@ -943,6 +1027,34 @@ export default function LedgerPage() {
                 <DropdownMenuItem asChild>
                   <Link to="/mypage">내정보</Link>
                 </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link
+                    to={buildLedgerListLink(
+                      monthToken,
+                      selectedFilter,
+                      selectedDisplayOptions,
+                      showCurrentWeekBudget,
+                      selectedCategoryIds,
+                    )}
+                    reloadDocument
+                  >
+                    월 리스트 보기
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link
+                    to={buildLedgerWeekListLink(
+                      monthToken,
+                      selectedFilter,
+                      selectedDisplayOptions,
+                      showCurrentWeekBudget,
+                      selectedCategoryIds,
+                    )}
+                    reloadDocument
+                  >
+                    주별 리스트 보기
+                  </Link>
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
 
@@ -1082,7 +1194,21 @@ export default function LedgerPage() {
                       )}
                       reloadDocument
                     >
-                      월 리스트 내역
+                      월 리스트 보기
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link
+                      to={buildLedgerWeekListLink(
+                        monthToken,
+                        selectedFilter,
+                        selectedDisplayOptions,
+                        showCurrentWeekBudget,
+                        selectedCategoryIds,
+                      )}
+                      reloadDocument
+                    >
+                      주별 리스트 보기
                     </Link>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -1150,18 +1276,25 @@ export default function LedgerPage() {
                     </button>
                   ))}
                   {canShowCurrentWeekBudget ? (
-                    <button
-                      type="button"
-                      className={cn(
-                        "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-medium transition-colors",
-                        showCurrentWeekBudget
-                          ? "border-slate-300 bg-slate-100 text-slate-700"
-                          : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
-                      )}
-                      onClick={toggleCurrentWeekBudgetView}
-                    >
-                      이번주 예산 보기
-                    </button>
+                    <div className="inline-flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        className={cn(
+                          "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-medium transition-colors",
+                          showCurrentWeekBudget
+                            ? "border-slate-300 bg-slate-100 text-slate-700"
+                            : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+                        )}
+                        onClick={toggleCurrentWeekBudgetView}
+                      >
+                        이번주 예산 보기
+                      </button>
+                      {showCurrentWeekBudget && currentWeekBudget ? (
+                        <span className="text-[10px] font-medium text-slate-500">
+                          {getCurrentWeekBudgetInlineLabel(budgetFocusType, currentWeekBudget.displayAmount)}
+                        </span>
+                      ) : null}
+                    </div>
                   ) : null}
               {canShowCurrentWeekBudget &&
               showCurrentWeekBudget &&

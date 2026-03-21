@@ -18,7 +18,12 @@ import {
   type LedgerEntryTypeValue,
   type LedgerPaymentMethodValue,
 } from "~/lib/ledger-entry";
-import { createEmptyBudgetTotals, getBudgetPeriodDayCount } from "~/lib/ledger-budget";
+import {
+  createEmptyBudgetTotals,
+  getBudgetDisplayTotalAmount,
+  getBudgetPeriodDayCount,
+  getFixedExpenseCategoryIds,
+} from "~/lib/ledger-budget";
 import { ensureLedgerSetup, getMonthToken, shiftMonthToken } from "~/lib/ledger";
 import { cn } from "~/lib/utils";
 
@@ -168,6 +173,15 @@ function buildLedgerListLink(monthToken: string, filter: EntryFilterValue) {
   }
 
   return `/ledger/list?${params.toString()}`;
+}
+
+function buildLedgerWeekListLink(monthToken: string, filter: EntryFilterValue) {
+  const params = new URLSearchParams({ month: monthToken });
+  if (filter !== "ALL") {
+    params.set("type", filter);
+  }
+
+  return `/ledger/weeks?${params.toString()}`;
 }
 
 function toggleEntryFilter(currentFilter: EntryFilterValue, nextFilter: LedgerEntryTypeValue): EntryFilterValue {
@@ -581,15 +595,54 @@ export default function LedgerStatsPage() {
     [prevEntries],
   );
 
-  const progressBudgetTargets = useMemo(() => {
-    const primaryPeriod = budgetPeriods.find((period) => period.id === primaryBudgetPeriodId) ?? budgetPeriods[0];
+  const expenseBudgetPeriods = useMemo(
+    () =>
+      budgetPeriods.map((period) => {
+        const expensePlan = period.plans.find((plan) => plan.type === "EXPENSE") ?? null;
+        return {
+          start: new Date(period.periodStartAt),
+          end: new Date(period.periodEndAt),
+          fixedCategoryIds: expensePlan ? getFixedExpenseCategoryIds(expensePlan.allocations) : new Set<number>(),
+        };
+      }),
+    [budgetPeriods],
+  );
+
+  const variableExpenseActual = useMemo(
+    () =>
+      entries.reduce((sum, entry) => {
+        if (entry.type !== "EXPENSE") {
+          return sum;
+        }
+
+        const usedAt = new Date(entry.usedAt);
+        const matchingPeriod = expenseBudgetPeriods.find((period) => usedAt >= period.start && usedAt < period.end);
+        if (
+          matchingPeriod &&
+          entry.categoryId !== null &&
+          matchingPeriod.fixedCategoryIds.has(entry.categoryId)
+        ) {
+          return sum;
+        }
+
+        return sum + entry.amount;
+      }, 0),
+    [entries, expenseBudgetPeriods],
+  );
+
+  const primaryBudgetPeriod = useMemo(
+    () => budgetPeriods.find((period) => period.id === primaryBudgetPeriodId) ?? budgetPeriods[0] ?? null,
+    [budgetPeriods, primaryBudgetPeriodId],
+  );
+
+  const planBudgetTargets = useMemo(() => {
     const totals = createEmptyBudgetTotals();
 
-    if (!primaryPeriod) {
+    if (!primaryBudgetPeriod) {
       return totals;
     }
 
-    for (const plan of primaryPeriod.plans) {
+    for (const plan of primaryBudgetPeriod.plans) {
       totals[plan.type] += plan.totalAmount;
     }
 
@@ -598,7 +651,19 @@ export default function LedgerStatsPage() {
       EXPENSE: Math.round(totals.EXPENSE),
       SAVING: Math.round(totals.SAVING),
     };
-  }, [budgetPeriods, primaryBudgetPeriodId]);
+  }, [primaryBudgetPeriod]);
+
+  const progressBudgetTargets = useMemo(() => {
+    const expensePlan = primaryBudgetPeriod?.plans.find((plan) => plan.type === "EXPENSE") ?? null;
+
+    return {
+      INCOME: planBudgetTargets.INCOME,
+      EXPENSE: expensePlan
+        ? Math.round(getBudgetDisplayTotalAmount("EXPENSE", expensePlan.totalAmount, expensePlan.allocations))
+        : planBudgetTargets.EXPENSE,
+      SAVING: planBudgetTargets.SAVING,
+    };
+  }, [planBudgetTargets, primaryBudgetPeriod]);
 
   const proratedBudgetTargets = useMemo(() => {
     const totals = createEmptyBudgetTotals();
@@ -630,7 +695,8 @@ export default function LedgerStatsPage() {
     const allTypes: LedgerEntryTypeValue[] = ["INCOME", "EXPENSE", "SAVING"];
 
     return allTypes.map((type) => {
-      const actual = summary[type.toLowerCase() as "income" | "expense" | "saving"];
+      const actual =
+        type === "EXPENSE" ? variableExpenseActual : summary[type.toLowerCase() as "income" | "expense" | "saving"];
       const target = progressBudgetTargets[type];
       const hasTarget = target > 0;
       const progressRaw = hasTarget ? Math.round((actual / target) * 100) : null;
@@ -647,7 +713,7 @@ export default function LedgerStatsPage() {
         meta: getBudgetMeta(type),
       };
     });
-  }, [progressBudgetTargets, summary]);
+  }, [progressBudgetTargets, summary, variableExpenseActual]);
 
   const visibleBudgetCards = useMemo(
     () => (selectedFilter === "ALL" ? budgetCards : budgetCards.filter((card) => card.type === selectedFilter)),
@@ -665,8 +731,8 @@ export default function LedgerStatsPage() {
   );
 
   const budgetNetTarget = useMemo(
-    () => progressBudgetTargets.INCOME - progressBudgetTargets.EXPENSE - progressBudgetTargets.SAVING,
-    [progressBudgetTargets],
+    () => planBudgetTargets.INCOME - planBudgetTargets.EXPENSE - planBudgetTargets.SAVING,
+    [planBudgetTargets],
   );
   const currentExpenseBudgetCards = useMemo(() => {
     if (!isCurrentMonth || !currentExpenseWeekBudget) {
@@ -683,7 +749,20 @@ export default function LedgerStatsPage() {
       }
 
       const usedAt = new Date(entry.usedAt);
-      return usedAt >= todayStart && usedAt <= nextDayStart ? sum + entry.amount : sum;
+      if (usedAt < todayStart || usedAt > nextDayStart) {
+        return sum;
+      }
+
+      const matchingPeriod = expenseBudgetPeriods.find((period) => usedAt >= period.start && usedAt < period.end);
+      if (
+        matchingPeriod &&
+        entry.categoryId !== null &&
+        matchingPeriod.fixedCategoryIds.has(entry.categoryId)
+      ) {
+        return sum;
+      }
+
+      return sum + entry.amount;
     }, 0);
 
     return {
@@ -700,7 +779,7 @@ export default function LedgerStatsPage() {
         meta: `오늘 지출 ${formatLedgerAmount(todayExpense)}`,
       },
     };
-  }, [currentExpenseWeekBudget, entries, isCurrentMonth, nextDayStart, todayStart]);
+  }, [currentExpenseWeekBudget, entries, expenseBudgetPeriods, isCurrentMonth, nextDayStart, todayStart]);
 
   const comparisonCards = useMemo(() => {
     const visibleTypes: LedgerEntryTypeValue[] =
@@ -1205,7 +1284,12 @@ export default function LedgerStatsPage() {
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
                 <Link to={buildLedgerListLink(monthToken, selectedFilter)} reloadDocument>
-                  월 리스트 내역
+                  월 리스트 보기
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link to={buildLedgerWeekListLink(monthToken, selectedFilter)} reloadDocument>
+                  주별 리스트 보기
                 </Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
