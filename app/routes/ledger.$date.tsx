@@ -544,7 +544,7 @@ export default function LedgerDatePage() {
             )}
           >
             <p className="text-[0.82rem] font-medium text-slate-900">수입</p>
-            <p className="mt-1 text-[0.92rem] font-semibold text-sky-500">{formatLedgerAmount(summary.income)}</p>
+            <p className="mt-1 text-[0.82rem] font-semibold text-sky-500">{formatLedgerAmount(summary.income)}</p>
           </Link>
           <Link
             to={buildLedgerDateLink(dateToken, calendarMonthToken, toggleEntryFilter(selectedFilter, "EXPENSE"), showCurrentWeekBudget)}
@@ -554,7 +554,7 @@ export default function LedgerDatePage() {
             )}
           >
             <p className="text-[0.82rem] font-medium text-slate-900">지출</p>
-            <p className="mt-1 text-[0.92rem] font-semibold text-rose-500">{formatLedgerAmount(summary.expense)}</p>
+            <p className="mt-1 text-[0.82rem] font-semibold text-rose-500">{formatLedgerAmount(summary.expense)}</p>
           </Link>
           <Link
             to={buildLedgerDateLink(dateToken, calendarMonthToken, toggleEntryFilter(selectedFilter, "SAVING"), showCurrentWeekBudget)}
@@ -564,7 +564,7 @@ export default function LedgerDatePage() {
             )}
           >
             <p className="text-[0.82rem] font-medium text-slate-900">저축</p>
-            <p className="mt-1 text-[0.92rem] font-semibold text-emerald-600">{formatLedgerAmount(summary.saving)}</p>
+            <p className="mt-1 text-[0.82rem] font-semibold text-emerald-600">{formatLedgerAmount(summary.saving)}</p>
           </Link>
         </div>
 

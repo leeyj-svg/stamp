@@ -425,22 +425,22 @@ export default function LedgerListPage() {
             to={buildLedgerListLink(monthToken, toggleEntryFilter(selectedFilter, "INCOME"), displayParam, showCurrentWeekBudget)}
             className={cn("py-3 text-center transition-colors", selectedFilter === "INCOME" ? "bg-sky-50" : "hover:bg-slate-50")}
           >
-            <p className="text-sm font-medium text-slate-900">수입</p>
-            <p className="mt-1 text-sm font-semibold text-sky-500">{formatLedgerAmount(summary.income)}</p>
+            <p className="text-[0.82rem] font-medium text-slate-900">수입</p>
+            <p className="mt-1 text-[0.82rem] font-semibold text-sky-500">{formatLedgerAmount(summary.income)}</p>
           </Link>
           <Link
             to={buildLedgerListLink(monthToken, toggleEntryFilter(selectedFilter, "EXPENSE"), displayParam, showCurrentWeekBudget)}
             className={cn("py-3 text-center transition-colors", selectedFilter === "EXPENSE" ? "bg-rose-50" : "hover:bg-slate-50")}
           >
-            <p className="text-sm font-medium text-slate-900">지출</p>
-            <p className="mt-1 text-sm font-semibold text-rose-400">{formatLedgerAmount(summary.expense)}</p>
+            <p className="text-[0.82rem] font-medium text-slate-900">지출</p>
+            <p className="mt-1 text-[0.82rem] font-semibold text-rose-400">{formatLedgerAmount(summary.expense)}</p>
           </Link>
           <Link
             to={buildLedgerListLink(monthToken, toggleEntryFilter(selectedFilter, "SAVING"), displayParam, showCurrentWeekBudget)}
             className={cn("py-3 text-center transition-colors", selectedFilter === "SAVING" ? "bg-emerald-50" : "hover:bg-slate-50")}
           >
-            <p className="text-sm font-medium text-slate-900">저축</p>
-            <p className="mt-1 text-sm font-semibold text-emerald-600">{formatLedgerAmount(summary.saving)}</p>
+            <p className="text-[0.82rem] font-medium text-slate-900">저축</p>
+            <p className="mt-1 text-[0.82rem] font-semibold text-emerald-600">{formatLedgerAmount(summary.saving)}</p>
           </Link>
         </div>
 

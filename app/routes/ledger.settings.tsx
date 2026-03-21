@@ -68,25 +68,6 @@ function getTypeAccent(type: LedgerEntryTypeValue) {
   };
 }
 
-function getCategoryAllocationRatio(totalAmount: number, amount: number) {
-  if (totalAmount <= 0 || amount <= 0) {
-    return 0;
-  }
-
-  return Math.max(0, Math.min(100, Math.round((amount / totalAmount) * 100)));
-}
-
-function getAllocationSegmentColor(type: LedgerEntryTypeValue, index: number) {
-  const palette =
-    type === "INCOME"
-      ? ["#38bdf8", "#0ea5e9", "#2563eb", "#60a5fa", "#0284c7", "#1d4ed8"]
-      : type === "EXPENSE"
-        ? ["#fb7185", "#f43f5e", "#ef4444", "#f97316", "#e11d48", "#dc2626"]
-        : ["#34d399", "#10b981", "#22c55e", "#14b8a6", "#059669", "#16a34a"];
-
-  return palette[index % palette.length];
-}
-
 async function redirectWithToast(request: Request, type: "success" | "error", message: string) {
   const flashSession = await getFlashSession(request.headers.get("Cookie"));
   flashSession.flash("toast", { type, message });
@@ -103,29 +84,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { settings, period } = await ensureLedgerBudgetTemplatePeriod(db, user.id);
 
   const totalsByType = sumPlanTotalsByType(period.plans);
-  const allocatedByType = sumAllocatedTotalsByType(period.plans);
 
   return {
     settings,
     currentMonthToken: getMonthToken(new Date()),
     budgetSummaryByType: LEDGER_BUDGET_TYPE_ORDER.map((type) => {
-      const plan = period.plans.find((item) => item.type === type);
-
       return {
         type,
         totalAmount: totalsByType[type],
-        allocatedAmount: allocatedByType[type],
-        categoryCount: plan?.allocations.length ?? 0,
-        allocations:
-          plan?.allocations
-            .map((allocation) => ({
-              categoryId: allocation.categoryId,
-              categoryName: allocation.category.name,
-              plannedAmount: Number(allocation.plannedAmount),
-            }))
-            .filter((allocation) => allocation.plannedAmount > 0) ?? [],
-        };
-      }),
+      };
+    }),
   };
 };
 
@@ -236,10 +204,6 @@ export default function LedgerSettingsPage() {
     [budgetSummaryByType, selectedBudgetType],
   );
   const selectedBudgetAccent = getTypeAccent(selectedBudgetType);
-  const selectedBudgetAllocationRatios = selectedBudgetSummary.allocations.map((allocation) => ({
-    ...allocation,
-    ratio: getCategoryAllocationRatio(selectedBudgetSummary.totalAmount, allocation.plannedAmount),
-  }));
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -285,17 +249,17 @@ export default function LedgerSettingsPage() {
       <div className="space-y-4 px-4 py-4 pb-8">
         <section className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
           <div className="mb-4">
-            <h2 className="text-base font-semibold text-slate-900">기간 기준</h2>
+            <h2 className="text-sm font-semibold text-slate-900">기간 기준</h2>
           </div>
 
           <Form method="post" className="space-y-4">
             <input type="hidden" name="intent" value="update_settings" />
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <label
                 className={cn(
-                  "flex cursor-pointer items-center rounded-2xl border px-4 py-2.5 text-sm font-medium transition-colors",
-                  settings.defaultPeriodBasis === "CALENDAR" ? "border-slate-900 bg-slate-50" : "border-slate-200",
+                  "flex cursor-pointer items-center rounded-2xl px-4 py-2 text-xs font-medium transition-colors",
+                  settings.defaultPeriodBasis === "CALENDAR" ? "text-slate-900" : "text-slate-600",
                 )}
               >
                 <input
@@ -303,14 +267,15 @@ export default function LedgerSettingsPage() {
                   name="defaultPeriodBasis"
                   value="CALENDAR"
                   defaultChecked={settings.defaultPeriodBasis === "CALENDAR"}
+                  className="h-3.5 w-3.5 shrink-0 accent-slate-900"
                 />
-                <span className="ml-2 text-slate-900">1일부터</span>
+                <span className="ml-2">1일부터</span>
               </label>
 
               <label
                 className={cn(
-                  "flex min-w-0 cursor-pointer items-center gap-2 rounded-2xl border px-4 py-2.5 text-sm font-medium transition-colors",
-                  settings.defaultPeriodBasis === "PAYDAY" ? "border-slate-900 bg-slate-50" : "border-slate-200",
+                  "flex min-w-0 cursor-pointer items-center gap-2 rounded-2xl px-4 py-2 text-xs font-medium transition-colors",
+                  settings.defaultPeriodBasis === "PAYDAY" ? "text-slate-900" : "text-slate-600",
                 )}
               >
                 <input
@@ -318,17 +283,18 @@ export default function LedgerSettingsPage() {
                   name="defaultPeriodBasis"
                   value="PAYDAY"
                   defaultChecked={settings.defaultPeriodBasis === "PAYDAY"}
+                  className="h-3.5 w-3.5 shrink-0 accent-slate-900"
                 />
-                <span className="ml-2 shrink-0 text-slate-900">급여</span>
+                <span className="ml-2 shrink-0">급여</span>
                 <Input
                   name="paydayDay"
                   type="number"
                   min={1}
                   max={31}
                   defaultValue={settings.paydayDay ?? 25}
-                  className="h-8 w-16 rounded-xl border-slate-200 px-2 text-center text-sm"
+                  className="h-7 w-16 rounded-xl border-slate-200 px-2 text-center text-xs"
                 />
-                <span className="shrink-0 text-slate-900">일</span>
+                <span className="shrink-0">일</span>
               </label>
             </div>
 
@@ -337,8 +303,8 @@ export default function LedgerSettingsPage() {
               <div className="grid grid-cols-2 gap-2">
                 <label
                   className={cn(
-                    "flex cursor-pointer items-center justify-center rounded-2xl border px-4 py-3 text-sm font-medium transition-colors",
-                    settings.weekStartDay === "MONDAY" ? "border-slate-900 bg-slate-50 text-slate-900" : "border-slate-200 text-slate-600",
+                    "flex cursor-pointer items-center rounded-2xl px-4 py-2 text-xs font-medium transition-colors",
+                    settings.weekStartDay === "MONDAY" ? "text-slate-900" : "text-slate-600",
                   )}
                 >
                   <input
@@ -346,13 +312,14 @@ export default function LedgerSettingsPage() {
                     name="weekStartDay"
                     value="MONDAY"
                     defaultChecked={settings.weekStartDay === "MONDAY"}
+                    className="h-3.5 w-3.5 shrink-0 accent-slate-900"
                   />
                   <span className="ml-2">월요일 시작</span>
                 </label>
                 <label
                   className={cn(
-                    "flex cursor-pointer items-center justify-center rounded-2xl border px-4 py-3 text-sm font-medium transition-colors",
-                    settings.weekStartDay === "SUNDAY" ? "border-slate-900 bg-slate-50 text-slate-900" : "border-slate-200 text-slate-600",
+                    "flex cursor-pointer items-center rounded-2xl px-4 py-2 text-xs font-medium transition-colors",
+                    settings.weekStartDay === "SUNDAY" ? "text-slate-900" : "text-slate-600",
                   )}
                 >
                   <input
@@ -360,6 +327,7 @@ export default function LedgerSettingsPage() {
                     name="weekStartDay"
                     value="SUNDAY"
                     defaultChecked={settings.weekStartDay === "SUNDAY"}
+                    className="h-3.5 w-3.5 shrink-0 accent-slate-900"
                   />
                   <span className="ml-2">일요일 시작</span>
                 </label>
@@ -375,21 +343,19 @@ export default function LedgerSettingsPage() {
         </section>
 
         <section className="space-y-2.5 rounded-2xl border border-slate-200 bg-white px-3 py-3">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <h2 className="text-sm font-semibold text-slate-900">기본 예산</h2>
-                <p className="mt-0.5 text-[11px] text-slate-500">
-                  새 달 예산이 처음 만들어질 때 여기 설정한 기본값으로 시작해요.
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button asChild variant="outline" className="h-8 rounded-xl border-slate-200 px-3 text-xs">
-                  <Link to={`/ledger/budgets?month=${currentMonthToken}`}>이 달 예산</Link>
-                </Button>
-                <Button asChild variant="outline" className="h-8 rounded-xl border-slate-200 px-3 text-xs">
-                  <Link to="/ledger/settings/budgets">상세 설정</Link>
-                </Button>
-              </div>
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">기본 예산</h2>
+
+            </div>
+            <div className="flex items-center gap-2">
+              <Button asChild variant="outline" className="h-8 rounded-xl border-slate-200 px-3 text-xs">
+                <Link to={`/ledger/budgets?month=${currentMonthToken}`}>이 달 예산</Link>
+              </Button>
+              <Button asChild variant="outline" className="h-8 rounded-xl border-slate-200 px-3 text-xs">
+                <Link to="/ledger/settings/budgets">상세 설정</Link>
+              </Button>
+            </div>
           </div>
 
           <Form method="post" className="space-y-2">
@@ -419,74 +385,31 @@ export default function LedgerSettingsPage() {
               })}
             </div>
 
-              <div className={cn("overflow-hidden rounded-3xl border bg-white", selectedBudgetAccent.border)}>
-                <div className="space-y-2 px-3 py-3">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-2.5">
-                  {selectedBudgetAllocationRatios.length === 0 ? (
-                    <div className="rounded-xl bg-white px-3 py-4 text-xs text-slate-500">아직 배정한 카테고리가 없습니다.</div>
-                  ) : (
-                    <div className="space-y-2">
-                      <div className="overflow-hidden rounded-2xl bg-slate-200">
-                        <div className="flex h-14 w-full">
-                          {selectedBudgetAllocationRatios.map((allocation, index) => (
-                            <div
-                              key={allocation.categoryId}
-                              className="flex min-w-0 items-center justify-center px-2 text-center text-[10px] font-semibold text-white"
-                              style={{
-                                width: `${allocation.ratio}%`,
-                                backgroundColor: getAllocationSegmentColor(selectedBudgetType, index),
-                              }}
-                              title={`${allocation.categoryName} ${allocation.ratio}% ${formatLedgerAmount(allocation.plannedAmount)}`}
-                            >
-                              <span className="truncate">{allocation.categoryName}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="space-y-1.5">
-                        {selectedBudgetAllocationRatios.map((allocation, index) => (
-                          <div key={allocation.categoryId} className="flex items-center justify-between gap-3 text-xs">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <span
-                                className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                style={{ backgroundColor: getAllocationSegmentColor(selectedBudgetType, index) }}
-                              />
-                              <span className="truncate text-slate-700">{allocation.categoryName}</span>
-                            </div>
-                            <div className="shrink-0 text-right">
-                              <span className="font-semibold text-slate-900">{allocation.ratio}%</span>
-                              <span className="ml-2 text-[11px] text-slate-500">{formatLedgerAmount(allocation.plannedAmount)}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                  <label className="flex items-center gap-3 border-b border-slate-200 pb-2">
-                    <div className="w-28 shrink-0">
-                      <p className="text-xs font-medium text-slate-600">{getBudgetSectionMeta(selectedBudgetType).totalLabel}</p>
-                    </div>
-                    <Input
-                      type="text"
-                      inputMode="numeric"
-                      value={quickBudgetTotals[selectedBudgetType] ?? ""}
-                      onChange={(event) =>
-                        setQuickBudgetTotals((current) => ({
-                          ...current,
-                          [selectedBudgetType]: formatBudgetInput(parseBudgetInput(event.target.value)),
-                        }))
-                      }
-                      placeholder="0"
-                      className="h-8 flex-1 rounded-none border-0 bg-transparent px-0 text-right text-xs font-semibold shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                    />
-                  </label>
-                </div>
+            <div className={cn("overflow-hidden rounded-3xl border bg-white", selectedBudgetAccent.border)}>
+              <div className="space-y-2 px-3 py-3">
+                <label className="flex items-center gap-3 border-b border-slate-200 pb-2">
+                  <div className="w-28 shrink-0">
+                    <p className="text-xs font-medium text-slate-600">{getBudgetSectionMeta(selectedBudgetType).totalLabel}</p>
+                  </div>
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    value={quickBudgetTotals[selectedBudgetType] ?? ""}
+                    onChange={(event) =>
+                      setQuickBudgetTotals((current) => ({
+                        ...current,
+                        [selectedBudgetType]: formatBudgetInput(parseBudgetInput(event.target.value)),
+                      }))
+                    }
+                    placeholder="0"
+                    className="h-8 flex-1 rounded-none border-0 bg-transparent px-0 text-right text-xs font-semibold shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                  />
+                </label>
               </div>
+            </div>
 
             <div className="flex items-center justify-between gap-2">
-              <p className="text-[11px] text-slate-500">여기서는 총액만 빠르게 바꾸고, 카테고리별 배정과 주별 이월은 상세 설정에서 이어서 할 수 있어요.</p>
+              <p className="text-[11px] text-slate-500">여기서는 월 총액만 빠르게 바꾸고, 카테고리별 배정은 상세 설정에서 이어서 할 수 있어요.</p>
               <Button type="submit" className="h-8 shrink-0 rounded-xl bg-slate-900 px-4 text-xs hover:bg-slate-800">
                 총액 저장
               </Button>
@@ -498,4 +421,3 @@ export default function LedgerSettingsPage() {
     </div>
   );
 }
-

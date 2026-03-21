@@ -20,7 +20,7 @@ export function ColorSwatchInput({
   return (
     <label
       className={cn(
-        "relative inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-full border border-slate-200 bg-white shadow-sm transition-transform hover:scale-[1.03]",
+        "relative inline-flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border border-slate-200 bg-white shadow-sm transition-transform hover:scale-[1.03]",
         className,
       )}
     >
