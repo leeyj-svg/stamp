@@ -10,8 +10,9 @@ import {
   LEDGER_BUDGET_TYPE_ORDER,
   parseBudgetInput,
 } from "~/lib/ledger-budget";
-import { ensureLedgerBudgetTemplatePeriod } from "~/lib/ledger-budget.server";
+import { ensureLedgerBudgetTemplatePeriod, resetAllLedgerBudgetPeriodsFromTemplate } from "~/lib/ledger-budget.server";
 import { Button } from "~/components/ui/button";
+import { ColorSwatchInput } from "~/components/color-swatch-input";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,6 +29,7 @@ import { commitSession, getFlashSession } from "~/lib/session.server";
 import { cn } from "~/lib/utils";
 
 type WeekCarryModeValue = "NONE" | "AUTO" | "MANUAL";
+const CATEGORY_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
 function parseSelectedType(value: string | null): LedgerEntryTypeValue {
   if (value === "INCOME" || value === "EXPENSE" || value === "SAVING") {
@@ -108,6 +110,10 @@ function parseFixedFlag(value: FormDataEntryValue | null) {
   return value === "true";
 }
 
+function normalizeCategoryColor(value: string | null | undefined) {
+  return value && CATEGORY_COLOR_PATTERN.test(value) ? value : "#94a3b8";
+}
+
 async function redirectWithToast(request: Request, type: "success" | "error", message: string, selectedType: LedgerEntryTypeValue = "EXPENSE") {
   const flashSession = await getFlashSession(request.headers.get("Cookie"));
   flashSession.flash("toast", { type, message });
@@ -186,6 +192,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       new URL(request.url).searchParams.get("type"),
   );
   const { period, categories } = await ensureLedgerBudgetTemplatePeriod(db, user.id);
+  const intent = formData.get("intent");
+
+  if (intent === "reset_all_month_budgets") {
+    const result = await resetAllLedgerBudgetPeriodsFromTemplate(db, user.id);
+    return redirectWithToast(request, "success", `${result.resetCount}개의 월 예산을 기본 예산으로 되돌렸습니다.`, selectedType);
+  }
 
   const categoryResponse = await handleCategoryIntent(db, user.id, formData);
 
@@ -201,6 +213,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const categoryTypeMap = new Map(categories.map((category) => [category.id, category.type] as const));
   const plansByType = new Map(period.plans.map((plan) => [plan.type, plan] as const));
+  const categoryColorsById = new Map(
+    categories.map((category) => [
+      category.id,
+      normalizeCategoryColor(typeof formData.get(`categoryColor_${category.id}`) === "string" ? String(formData.get(`categoryColor_${category.id}`)) : category.color),
+    ]),
+  );
 
   const totalBudgetsByType = createEmptyBudgetTotals();
   const weekCarryModeByType = {} as Record<LedgerEntryTypeValue, WeekCarryModeValue>;
@@ -265,6 +283,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   await db.$transaction(async (tx) => {
+    for (const category of categories) {
+      const nextColor = categoryColorsById.get(category.id);
+      if (!nextColor || nextColor === normalizeCategoryColor(category.color)) {
+        continue;
+      }
+
+      await tx.ledgerCategory.update({
+        where: { id: category.id },
+        data: { color: nextColor },
+      });
+    }
+
     for (const type of LEDGER_BUDGET_TYPE_ORDER) {
       const plan = plansByType.get(type);
       if (!plan) {
@@ -359,6 +389,13 @@ export default function LedgerBudgetSettingsPage() {
       ),
     ),
   );
+  const [categoryColors, setCategoryColors] = useState<Record<string, string>>(
+    Object.fromEntries(
+      categoriesByType.flatMap((group) =>
+        group.items.map((category) => [`${group.type}:${category.id}`, normalizeCategoryColor(category.color)] as const),
+      ),
+    ),
+  );
 
   const totalsByType = useMemo(
     () =>
@@ -401,6 +438,7 @@ export default function LedgerBudgetSettingsPage() {
             name: category.name,
             amount,
             ratio: getCategoryAllocationRatio(selectedTotalBudgetAmount, amount),
+            color: categoryColors[`${selectedBudgetType}:${category.id}`] ?? normalizeCategoryColor(category.color),
           };
         })
         .filter((item) => item.amount > 0),
@@ -456,11 +494,25 @@ export default function LedgerBudgetSettingsPage() {
       <div className="px-3 py-3 pb-5">
         <section className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
           <div className="space-y-2.5">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900">예산 상세</h2>
-              <p className="mt-0.5 text-[11px] text-slate-500">
-                현재 수정 중인 기본값은 <span className="font-medium text-slate-700">{budgetPeriodLabel || LEDGER_BUDGET_TEMPLATE_LABEL}</span>입니다.
-              </p>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900">예산 상세</h2>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  현재 수정 중인 기본값은 <span className="font-medium text-slate-700">{budgetPeriodLabel || LEDGER_BUDGET_TEMPLATE_LABEL}</span>입니다.
+                </p>
+              </div>
+
+              <Form method="post">
+                <input type="hidden" name="intent" value="reset_all_month_budgets" />
+                <input type="hidden" name="selectedType" value={selectedBudgetType} />
+                <Button
+                  type="submit"
+                  variant="ghost"
+                  className="h-7 shrink-0 rounded-xl border border-slate-200 bg-white px-2.5 text-[11px] text-slate-600 hover:bg-slate-50"
+                >
+                  모든 월 예산 초기화
+                </Button>
+              </Form>
             </div>
 
             <Form id={budgetFormId} method="post" className="space-y-3">
@@ -476,6 +528,7 @@ export default function LedgerBudgetSettingsPage() {
                   <div key={`${group.type}:${category.id}`}>
                     <input type="hidden" name={`budget_${category.id}`} value={budgetValues[`${group.type}:${category.id}`] ?? ""} />
                     <input type="hidden" name={`isFixed_${category.id}`} value={fixedFlags[`${group.type}:${category.id}`] ? "true" : "false"} />
+                    <input type="hidden" name={`categoryColor_${category.id}`} value={categoryColors[`${group.type}:${category.id}`] ?? "#94a3b8"} />
                   </div>
                 )),
               )}
@@ -565,7 +618,7 @@ export default function LedgerBudgetSettingsPage() {
                                 className="flex min-w-0 items-center justify-center px-2 text-center text-[10px] font-semibold text-white"
                                 style={{
                                   width: `${allocation.ratio}%`,
-                                  backgroundColor: getAllocationSegmentColor(selectedBudgetType, index),
+                                  backgroundColor: allocation.color ?? getAllocationSegmentColor(selectedBudgetType, index),
                                 }}
                                 title={`${allocation.name} ${allocation.ratio}% ${formatLedgerAmount(allocation.amount)}`}
                               >
@@ -581,7 +634,7 @@ export default function LedgerBudgetSettingsPage() {
                               <div className="flex min-w-0 items-center gap-2">
                                 <span
                                   className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                  style={{ backgroundColor: getAllocationSegmentColor(selectedBudgetType, index) }}
+                                  style={{ backgroundColor: allocation.color ?? getAllocationSegmentColor(selectedBudgetType, index) }}
                                 />
                                 <span className="truncate text-slate-700">{allocation.name}</span>
                               </div>
@@ -617,18 +670,28 @@ export default function LedgerBudgetSettingsPage() {
                     const isEditing = editingCategoryId === category.id;
 
                     return (
-                      <div key={category.id} className="flex items-center gap-3 border-b border-slate-200 py-2 last:border-b-0">
+                      <div key={category.id} className="flex items-center gap-2.5 border-b border-slate-200 py-2 last:border-b-0">
+                        <ColorSwatchInput
+                          value={categoryColors[`${selectedBudgetType}:${category.id}`] ?? normalizeCategoryColor(category.color)}
+                          onChange={(event) =>
+                            setCategoryColors((current) => ({
+                              ...current,
+                              [`${selectedBudgetType}:${category.id}`]: event.target.value,
+                            }))
+                          }
+                        />
                         <div className="min-w-0 flex-1">
                           {isEditing ? (
                             <Form method="post" action={actionUrl} className="flex items-center gap-2">
                               <input type="hidden" name="intent" value="update_category" />
                               <input type="hidden" name="type" value={selectedBudgetType} />
                               <input type="hidden" name="categoryId" value={category.id} />
+                              <input type="hidden" name="color" value={categoryColors[`${selectedBudgetType}:${category.id}`] ?? normalizeCategoryColor(category.color)} />
                               <Input
                                 name="name"
                                 value={editingCategoryName}
                                 onChange={(event) => setEditingCategoryName(event.target.value)}
-                                className="h-8 min-w-0 flex-1 rounded-none border-0 bg-transparent px-0 text-xs font-medium shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                                className="h-8 min-w-0 flex-1 rounded-none border-0 bg-transparent px-0 text-[11px] font-medium shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                                 autoFocus
                               />
                               <Button type="submit" variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-xl text-slate-500 hover:bg-white">
@@ -642,7 +705,7 @@ export default function LedgerBudgetSettingsPage() {
                               onClick={() => beginCategoryEdit(category.id, category.name)}
                               className="flex w-full min-w-0 items-center gap-2 text-left"
                             >
-                              <span className="truncate text-xs font-medium text-slate-700">{category.name}</span>
+                              <span className="truncate text-[11px] font-medium text-slate-700">{category.name}</span>
                               {!category.isActive ? <span className="text-[11px] text-slate-400">숨김</span> : null}
                             </button>
                           )}
@@ -657,7 +720,7 @@ export default function LedgerBudgetSettingsPage() {
                             }))
                           }
                           className={cn(
-                            "h-8 shrink-0 rounded-xl border px-2.5 text-[11px] font-medium transition-colors",
+                            "ml-1 h-8 min-w-[3.9rem] shrink-0 rounded-xl border px-3 text-[10px] font-medium transition-colors",
                             fixedFlags[`${selectedBudgetType}:${category.id}`]
                               ? "border-violet-200 bg-violet-50 text-violet-600"
                               : "border-slate-200 bg-white text-slate-500",
@@ -677,7 +740,7 @@ export default function LedgerBudgetSettingsPage() {
                             }))
                           }
                           placeholder="0"
-                          className="h-8 w-32 rounded-none border-0 bg-transparent px-0 text-right text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                          className="h-8 w-32 rounded-none border-0 bg-transparent px-0 text-right text-[13px] shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                         />
 
                         <Form method="post" action={actionUrl}>
@@ -704,11 +767,12 @@ export default function LedgerBudgetSettingsPage() {
               <Form method="post" action={actionUrl} className="mt-2 flex items-center gap-3 border-t border-slate-200 pt-2">
                 <input type="hidden" name="intent" value="create_category" />
                 <input type="hidden" name="type" value={selectedBudgetType} />
+                <ColorSwatchInput name="color" defaultValue="#94a3b8" />
                 <div className="min-w-0 flex-1">
                   <Input
                     name="name"
                     placeholder="새 카테고리"
-                    className="h-8 w-full rounded-none border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                    className="h-8 w-full rounded-none border-0 bg-transparent px-0 text-[13px] shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                   />
                 </div>
                 <Button type="submit" variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-xl text-slate-500 hover:bg-white">

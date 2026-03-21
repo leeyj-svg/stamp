@@ -507,7 +507,7 @@ export default function LedgerDatePage() {
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <Link to={buildLedgerListLink(calendarMonthToken, selectedFilter, showCurrentWeekBudget, selectedCategoryIds)}>
+                  <Link to={buildLedgerListLink(calendarMonthToken, selectedFilter, showCurrentWeekBudget, selectedCategoryIds)} reloadDocument>
                     월 리스트 내역
                   </Link>
                 </DropdownMenuItem>

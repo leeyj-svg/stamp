@@ -51,6 +51,15 @@ function roundBudgetAmount(amount: number) {
   return Math.round(amount * 100) / 100;
 }
 
+function isPrismaUniqueConstraintError(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: string }).code === "P2002"
+  );
+}
+
 function startOfNextDay(referenceDate: Date) {
   return new Date(
     referenceDate.getFullYear(),
@@ -263,19 +272,42 @@ async function copyBudgetDataFromSourcePeriod(
       },
     });
 
-    await db.ledgerBudgetCategoryAllocation.deleteMany({
+    await db.ledgerBudgetWeekPlan.deleteMany({
       where: { planId: targetPlan.id },
     });
 
+    const sourceCategoryIds = sourcePlan.allocations.map((allocation) => allocation.categoryId);
+
+    await db.ledgerBudgetCategoryAllocation.deleteMany({
+      where: {
+        planId: targetPlan.id,
+        categoryId: {
+          notIn: sourceCategoryIds.length > 0 ? sourceCategoryIds : [-1],
+        },
+      },
+    });
+
     if (sourcePlan.allocations.length > 0) {
-      await db.ledgerBudgetCategoryAllocation.createMany({
-        data: sourcePlan.allocations.map((allocation) => ({
-          planId: targetPlan.id,
-          categoryId: allocation.categoryId,
-          plannedAmount: allocation.plannedAmount,
-          isFixed: allocation.isFixed,
-        })),
-      });
+      for (const allocation of sourcePlan.allocations) {
+        await db.ledgerBudgetCategoryAllocation.upsert({
+          where: {
+            planId_categoryId: {
+              planId: targetPlan.id,
+              categoryId: allocation.categoryId,
+            },
+          },
+          update: {
+            plannedAmount: allocation.plannedAmount,
+            isFixed: allocation.isFixed,
+          },
+          create: {
+            planId: targetPlan.id,
+            categoryId: allocation.categoryId,
+            plannedAmount: allocation.plannedAmount,
+            isFixed: allocation.isFixed,
+          },
+        });
+      }
     }
   }
 }
@@ -299,6 +331,29 @@ export async function cloneLedgerBudgetPeriodData(
   }
 
   await copyBudgetDataFromSourcePeriod(db, sourcePeriod, targetPeriod);
+}
+
+export async function resetAllLedgerBudgetPeriodsFromTemplate(db: LedgerDbClient, userId: string) {
+  const template = await ensureLedgerBudgetTemplatePeriod(db, userId);
+  const targetPeriods = await db.ledgerBudgetPeriod.findMany({
+    where: {
+      userId,
+      basis: template.period.basis,
+      id: {
+        not: template.period.id,
+      },
+    },
+    select: { id: true },
+    orderBy: { periodStartAt: "asc" },
+  });
+
+  for (const targetPeriod of targetPeriods) {
+    await cloneLedgerBudgetPeriodData(db, template.period.id, targetPeriod.id);
+  }
+
+  return {
+    resetCount: targetPeriods.length,
+  };
 }
 
 async function ensureLedgerBudgetPeriodRecord(
@@ -328,46 +383,88 @@ async function ensureLedgerBudgetPeriodRecord(
     : getLedgerPeriodRange(referenceDate, settings.defaultPeriodBasis, settings.paydayDay ?? 25);
   const label = templateMode ? LEDGER_BUDGET_TEMPLATE_LABEL : getLedgerPeriodLabel(periodRange.start, periodRange.end);
 
-  const period = await db.ledgerBudgetPeriod.upsert({
-    where: {
-      userId_basis_periodStartAt_periodEndAt: {
-        userId,
-        basis: settings.defaultPeriodBasis,
-        periodStartAt: periodRange.start,
-        periodEndAt: periodRange.end,
-      },
-    },
-    update: {
-      label,
-    },
-    create: {
+  const periodWhere = {
+    userId_basis_periodStartAt_periodEndAt: {
       userId,
       basis: settings.defaultPeriodBasis,
       periodStartAt: periodRange.start,
       periodEndAt: periodRange.end,
-      label,
     },
-    select: {
-      id: true,
-    },
+  } as const;
+
+  let period = await db.ledgerBudgetPeriod.findUnique({
+    where: periodWhere,
+    select: { id: true },
   });
+
+  if (!period) {
+    try {
+      period = await db.ledgerBudgetPeriod.create({
+        data: {
+          userId,
+          basis: settings.defaultPeriodBasis,
+          periodStartAt: periodRange.start,
+          periodEndAt: periodRange.end,
+          label,
+        },
+        select: {
+          id: true,
+        },
+      });
+    } catch (error) {
+      if (!isPrismaUniqueConstraintError(error)) {
+        throw error;
+      }
+
+      period = await db.ledgerBudgetPeriod.findUnique({
+        where: periodWhere,
+        select: { id: true },
+      });
+    }
+  } else {
+    await db.ledgerBudgetPeriod.update({
+      where: { id: period.id },
+      data: { label },
+    });
+  }
+
+  if (!period) {
+    throw new Error("가계부 예산 기간을 찾을 수 없습니다.");
+  }
 
   await Promise.all(
     LEDGER_BUDGET_TYPE_ORDER.map((type) =>
-      db.ledgerBudgetPlan.upsert({
-        where: {
+      (async () => {
+        const planWhere = {
           periodId_type: {
             periodId: period.id,
             type,
           },
-        },
-        update: {},
-        create: {
-          periodId: period.id,
-          type,
-          totalAmount: 0,
-        },
-      }),
+        } as const;
+
+        const existingPlan = await db.ledgerBudgetPlan.findUnique({
+          where: planWhere,
+          select: { id: true },
+        });
+
+        if (existingPlan) {
+          return;
+        }
+
+        try {
+          await db.ledgerBudgetPlan.create({
+            data: {
+              periodId: period.id,
+              type,
+              totalAmount: 0,
+            },
+          });
+        } catch (error) {
+          if (!isPrismaUniqueConstraintError(error)) {
+            throw error;
+          }
+        }
+      })(),
     ),
   );
 

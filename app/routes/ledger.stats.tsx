@@ -244,24 +244,42 @@ function getStartOfBudgetWeek(date: Date, weekStartDay: WeekStartDayValue) {
 }
 
 function getMonthWeekRanges(monthStart: Date, nextMonthStart: Date, weekStartDay: WeekStartDayValue) {
-  const ranges: Array<{ start: Date; end: Date; label: string }> = [];
+  const rawRanges: Array<{ start: Date; end: Date }> = [];
   let cursor = getStartOfBudgetWeek(monthStart, weekStartDay);
-  let weekIndex = 1;
 
   while (cursor < nextMonthStart) {
-    const start = new Date(cursor);
-    const end = new Date(cursor);
-    end.setDate(end.getDate() + 7);
-    ranges.push({
-      start,
-      end,
-      label: `${weekIndex}주차`,
-    });
-    cursor = end;
-    weekIndex += 1;
+    const rawStart = new Date(cursor);
+    const rawEnd = new Date(cursor);
+    rawEnd.setDate(rawEnd.getDate() + 7);
+    const start = rawStart < monthStart ? new Date(monthStart) : rawStart;
+    const end = rawEnd > nextMonthStart ? new Date(nextMonthStart) : rawEnd;
+
+    if (start < end) {
+      rawRanges.push({ start, end });
+    }
+
+    cursor = rawEnd;
   }
 
-  return ranges;
+  let ranges = rawRanges;
+
+  while (ranges.length > 5) {
+    const firstRange = ranges[0];
+    const lastRange = ranges[ranges.length - 1];
+    const firstDays = getOverlapDayCount(firstRange.start, firstRange.end, monthStart, nextMonthStart);
+    const lastDays = getOverlapDayCount(lastRange.start, lastRange.end, monthStart, nextMonthStart);
+
+    if (firstDays <= lastDays && ranges.length > 1) {
+      ranges = [{ start: firstRange.start, end: ranges[1].end }, ...ranges.slice(2)];
+    } else if (ranges.length > 1) {
+      ranges = [...ranges.slice(0, -2), { start: ranges[ranges.length - 2].start, end: lastRange.end }];
+    }
+  }
+
+  return ranges.map((range, index) => ({
+    ...range,
+    label: `${index + 1}주차`,
+  }));
 }
 
 function getBudgetMeta(type: LedgerEntryTypeValue) {
@@ -367,7 +385,7 @@ function buildAmountBreakdown<T extends { amount: number }>(
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { user } = await getSessionWithPermission(request, "USER");
   await ensureLedgerSetup(db, user.id);
-  const { ensureLedgerBudgetPeriodForDate } = await import("~/lib/ledger-budget.server");
+  const { ensureLedgerBudgetPeriodForDate, getCurrentLedgerWeekBudgetSummary } = await import("~/lib/ledger-budget.server");
 
   const url = new URL(request.url);
   const monthToken = parseMonthToken(url.searchParams.get("month")) ?? getMonthToken(new Date());
@@ -444,6 +462,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ensureLedgerBudgetPeriodForDate(db, user.id, monthEnd),
   ]);
 
+  const today = new Date();
+  const todayMonthToken = getMonthToken(today);
+  const isCurrentMonth = monthToken === todayMonthToken;
+  const currentExpenseWeekBudget =
+    isCurrentMonth ? await getCurrentLedgerWeekBudgetSummary(db, user.id, "EXPENSE", today) : null;
+
   const budgetPeriods = Array.from(
     new Map(
       [startBudgetResult.period, endBudgetResult.period].map((period) => [
@@ -467,17 +491,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ).values(),
   );
 
-  const today = new Date();
-
   return {
     monthToken,
     monthLabel: getMonthLabel(monthStart),
     prevMonthToken: shiftMonthToken(monthToken, -1),
     nextMonthToken: shiftMonthToken(monthToken, 1),
-    todayMonthToken: getMonthToken(today),
+    todayMonthToken,
     todayDateToken: new Intl.DateTimeFormat("sv-SE").format(today),
+    isCurrentMonth,
+    currentExpenseWeekBudget: currentExpenseWeekBudget
+      ? {
+          weekLabel: currentExpenseWeekBudget.weekLabel,
+          weekStartAt: currentExpenseWeekBudget.weekStartAt,
+          weekEndAt: currentExpenseWeekBudget.weekEndAt,
+          displayAmount: currentExpenseWeekBudget.displayAmount,
+          targetAmount: currentExpenseWeekBudget.targetAmount,
+          plannedAmount: currentExpenseWeekBudget.plannedAmount,
+          carryInAmount: currentExpenseWeekBudget.carryInAmount,
+          spentAmount: currentExpenseWeekBudget.spentAmount,
+        }
+      : null,
     selectedFilter,
     weekStartDay: startBudgetResult.settings.weekStartDay,
+    primaryBudgetPeriodId: startBudgetResult.period.id,
     budgetPeriods,
     entries: entries.map(mapEntry),
     prevEntries: prevEntries.map(mapEntry),
@@ -492,8 +528,11 @@ export default function LedgerStatsPage() {
     nextMonthToken,
     todayMonthToken,
     todayDateToken,
+    isCurrentMonth,
+    currentExpenseWeekBudget,
     selectedFilter,
     weekStartDay,
+    primaryBudgetPeriodId,
     budgetPeriods,
     entries,
     prevEntries,
@@ -506,6 +545,8 @@ export default function LedgerStatsPage() {
     [monthStart],
   );
   const prevMonthLabel = useMemo(() => getMonthLabel(getMonthStart(prevMonthToken)), [prevMonthToken]);
+  const todayStart = useMemo(() => new Date(`${todayDateToken}T00:00:00`), [todayDateToken]);
+  const nextDayStart = useMemo(() => new Date(`${todayDateToken}T23:59:59.999`), [todayDateToken]);
 
   const filteredEntries = useMemo(
     () => (selectedFilter === "ALL" ? entries : entries.filter((entry) => entry.type === selectedFilter)),
@@ -540,7 +581,26 @@ export default function LedgerStatsPage() {
     [prevEntries],
   );
 
-  const budgetTargets = useMemo(() => {
+  const progressBudgetTargets = useMemo(() => {
+    const primaryPeriod = budgetPeriods.find((period) => period.id === primaryBudgetPeriodId) ?? budgetPeriods[0];
+    const totals = createEmptyBudgetTotals();
+
+    if (!primaryPeriod) {
+      return totals;
+    }
+
+    for (const plan of primaryPeriod.plans) {
+      totals[plan.type] += plan.totalAmount;
+    }
+
+    return {
+      INCOME: Math.round(totals.INCOME),
+      EXPENSE: Math.round(totals.EXPENSE),
+      SAVING: Math.round(totals.SAVING),
+    };
+  }, [budgetPeriods, primaryBudgetPeriodId]);
+
+  const proratedBudgetTargets = useMemo(() => {
     const totals = createEmptyBudgetTotals();
 
     for (const period of budgetPeriods) {
@@ -571,21 +631,23 @@ export default function LedgerStatsPage() {
 
     return allTypes.map((type) => {
       const actual = summary[type.toLowerCase() as "income" | "expense" | "saving"];
-      const target = budgetTargets[type];
-      const progressRaw = target > 0 ? Math.round((actual / target) * 100) : 0;
-      const remaining = target - actual;
+      const target = progressBudgetTargets[type];
+      const hasTarget = target > 0;
+      const progressRaw = hasTarget ? Math.round((actual / target) * 100) : null;
+      const remaining = hasTarget ? target - actual : null;
 
       return {
         type,
         actual,
         target,
         progressRaw,
-        progressValue: clampPercent(progressRaw),
+        progressValue: progressRaw === null ? 0 : clampPercent(progressRaw),
         remaining,
+        hasTarget,
         meta: getBudgetMeta(type),
       };
     });
-  }, [budgetTargets, summary]);
+  }, [progressBudgetTargets, summary]);
 
   const visibleBudgetCards = useMemo(
     () => (selectedFilter === "ALL" ? budgetCards : budgetCards.filter((card) => card.type === selectedFilter)),
@@ -603,9 +665,42 @@ export default function LedgerStatsPage() {
   );
 
   const budgetNetTarget = useMemo(
-    () => budgetTargets.INCOME - budgetTargets.EXPENSE - budgetTargets.SAVING,
-    [budgetTargets],
+    () => progressBudgetTargets.INCOME - progressBudgetTargets.EXPENSE - progressBudgetTargets.SAVING,
+    [progressBudgetTargets],
   );
+  const currentExpenseBudgetCards = useMemo(() => {
+    if (!isCurrentMonth || !currentExpenseWeekBudget) {
+      return null;
+    }
+
+    const weekStart = new Date(currentExpenseWeekBudget.weekStartAt);
+    const weekEnd = new Date(currentExpenseWeekBudget.weekEndAt);
+    const weekDayCount = Math.max(1, Math.round((weekEnd.getTime() - weekStart.getTime()) / (1000 * 60 * 60 * 24)));
+    const dayTarget = Math.round((currentExpenseWeekBudget.targetAmount / weekDayCount) * 100) / 100;
+    const todayExpense = entries.reduce((sum, entry) => {
+      if (entry.type !== "EXPENSE") {
+        return sum;
+      }
+
+      const usedAt = new Date(entry.usedAt);
+      return usedAt >= todayStart && usedAt <= nextDayStart ? sum + entry.amount : sum;
+    }, 0);
+
+    return {
+      week: {
+        label: "이번 주 남은 예산",
+        amount: currentExpenseWeekBudget.displayAmount,
+        target: currentExpenseWeekBudget.targetAmount,
+        meta: currentExpenseWeekBudget.weekLabel,
+      },
+      day: {
+        label: "오늘 남은 예산",
+        amount: Math.round((dayTarget - todayExpense) * 100) / 100,
+        target: dayTarget,
+        meta: `오늘 지출 ${formatLedgerAmount(todayExpense)}`,
+      },
+    };
+  }, [currentExpenseWeekBudget, entries, isCurrentMonth, nextDayStart, todayStart]);
 
   const comparisonCards = useMemo(() => {
     const visibleTypes: LedgerEntryTypeValue[] =
@@ -741,6 +836,7 @@ export default function LedgerStatsPage() {
         income: values.income,
         expense: values.expense,
         saving: values.saving,
+        netAmount: values.income - values.expense - values.saving,
         selectedAmount:
           selectedFilter === "INCOME"
             ? values.income
@@ -928,40 +1024,45 @@ export default function LedgerStatsPage() {
     return categoryBudgetSections.find((section) => section.type === categoryTab) ?? categoryBudgetSections[0] ?? null;
   }, [categoryBudgetSections, categoryTab, selectedFilter]);
   const weeklyStats = useMemo(() => {
-    const grouped = new Map<string, { start: Date; end: Date; income: number; expense: number; saving: number }>();
+    const ranges = getMonthWeekRanges(monthStart, nextMonthStart, weekStartDay);
 
-    for (const entry of filteredEntries) {
-      const entryDate = new Date(entry.usedAt);
-      const weekStart = getStartOfBudgetWeek(entryDate, weekStartDay);
-      const key = weekStart.toISOString().slice(0, 10);
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekEnd.getDate() + 6);
+    return ranges
+      .map((range) => {
+        let income = 0;
+        let expense = 0;
+        let saving = 0;
 
-      const current = grouped.get(key) ?? { start: weekStart, end: weekEnd, income: 0, expense: 0, saving: 0 };
-      if (entry.type === "INCOME") current.income += entry.amount;
-      if (entry.type === "EXPENSE") current.expense += entry.amount;
-      if (entry.type === "SAVING") current.saving += entry.amount;
-      grouped.set(key, current);
-    }
+        for (const entry of filteredEntries) {
+          const usedAt = new Date(entry.usedAt);
+          if (usedAt < range.start || usedAt >= range.end) {
+            continue;
+          }
 
-    return Array.from(grouped.values())
-      .sort((left, right) => left.start.getTime() - right.start.getTime())
-      .map((item, index) => ({
-        label: `${index + 1}주차`,
-        rangeLabel: formatWeekRangeLabel(item.start, item.end),
-        income: item.income,
-        expense: item.expense,
-        saving: item.saving,
-        selectedAmount:
+          if (entry.type === "INCOME") income += entry.amount;
+          if (entry.type === "EXPENSE") expense += entry.amount;
+          if (entry.type === "SAVING") saving += entry.amount;
+        }
+
+        const selectedAmount =
           selectedFilter === "INCOME"
-            ? item.income
+            ? income
             : selectedFilter === "EXPENSE"
-              ? item.expense
+              ? expense
               : selectedFilter === "SAVING"
-                ? item.saving
-                : item.income + item.expense + item.saving,
-      }));
-  }, [filteredEntries, selectedFilter, weekStartDay]);
+                ? saving
+                : income + expense + saving;
+
+        return {
+          label: range.label,
+          rangeLabel: formatWeekRangeLabel(range.start, new Date(range.end.getTime() - 1000 * 60 * 60 * 24)),
+          income,
+          expense,
+          saving,
+          selectedAmount,
+        };
+      })
+      .filter((item) => item.income > 0 || item.expense > 0 || item.saving > 0);
+  }, [filteredEntries, monthStart, nextMonthStart, selectedFilter, weekStartDay]);
   const maxWeeklySelectedAmount = useMemo(
     () => weeklyStats.reduce((max, item) => Math.max(max, item.selectedAmount), 0),
     [weeklyStats],
@@ -985,6 +1086,10 @@ export default function LedgerStatsPage() {
       .slice(0, 5);
   }, [activeCategoryBudgetSection]);
   const weeklyGoalFocusType: LedgerEntryTypeValue = selectedFilter === "ALL" ? categoryTab : selectedFilter;
+  const activeWeeklyGoalBudgetCard = useMemo(
+    () => budgetCards.find((card) => card.type === weeklyGoalFocusType) ?? null,
+    [budgetCards, weeklyGoalFocusType],
+  );
   const weeklyGoalStats = useMemo(() => {
     const rangeStart = new Date(monthStart.getFullYear(), monthStart.getMonth(), 1, 0, 0, 0, 0);
     const ranges = getMonthWeekRanges(rangeStart, nextMonthStart, weekStartDay);
@@ -1040,7 +1145,7 @@ export default function LedgerStatsPage() {
             const targetItem = targets.get(categoryId);
             const actual = Math.round(actualItem?.actual ?? 0);
             const target = Math.round(targetItem?.target ?? 0);
-            const progressRaw = target > 0 ? Math.round((actual / target) * 100) : actual > 0 ? 100 : 0;
+            const progressRaw = target > 0 ? Math.round((actual / target) * 100) : 0;
 
             return {
               id: String(categoryId),
@@ -1096,22 +1201,21 @@ export default function LedgerStatsPage() {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem asChild>
-                  <Link to={buildLedgerMonthLink(monthToken, selectedFilter)}>달력으로</Link>
+                <Link to={buildLedgerMonthLink(monthToken, selectedFilter)}>달력으로</Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
-                  <Link to={buildLedgerListLink(monthToken, selectedFilter)}>월 리스트 내역</Link>
+                <Link to={buildLedgerListLink(monthToken, selectedFilter)} reloadDocument>
+                  월 리스트 내역
+                </Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
-                  <Link to="/ledger/settings">설정</Link>
+                <Link to="/ledger/settings">설정</Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
-                  <Link to={buildLedgerBudgetLink(monthToken, selectedFilter)}>이 달 예산 수정</Link>
+                <Link to={buildLedgerBudgetLink(monthToken, selectedFilter)}>이 달 예산 수정</Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
-                  <Link to={buildLedgerStatsLink(todayMonthToken, selectedFilter)}>이번 달 통계</Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                  <Link to={buildLedgerDateLink(todayDateToken, todayMonthToken, selectedFilter)}>오늘 내역</Link>
+                <Link to={buildLedgerDateLink(todayDateToken, todayMonthToken, selectedFilter)}>오늘 내역</Link>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -1192,6 +1296,7 @@ export default function LedgerStatsPage() {
                     progressValue={card.progressValue}
                     progressRaw={card.progressRaw}
                     remaining={card.remaining}
+                    hasTarget={card.hasTarget}
                     type={card.type}
                   />
                 ))}
@@ -1211,9 +1316,32 @@ export default function LedgerStatsPage() {
               </div>
             </StatSection>
 
-            <StatSection title="이번 달 포인트">
-              <HighlightDayCardList items={highlightDayCards} emptyMessage="아직 비교할 만한 내역이 없습니다." />
-            </StatSection>
+            {(selectedFilter === "ALL" || selectedFilter === "EXPENSE") ? (
+              <StatSection title="지출 운영 예산">
+                {!isCurrentMonth ? (
+                  <EmptyState message="이번 달 통계에서만 확인할 수 있어요." />
+                ) : !currentExpenseBudgetCards ? (
+                  <EmptyState message="지출 예산이 아직 설정되지 않았어요." />
+                ) : (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {[currentExpenseBudgetCards.week, currentExpenseBudgetCards.day].map((item) => {
+                      const isOver = item.amount < 0;
+
+                      return (
+                        <div key={item.label} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                          <p className="text-[0.76rem] font-medium text-slate-700">{item.label}</p>
+                          <p className={cn("mt-1 text-[0.88rem] font-semibold", isOver ? "text-rose-500" : "text-slate-900")}>
+                            {isOver ? `-${formatLedgerAmount(Math.abs(item.amount))}` : formatLedgerAmount(item.amount)}
+                          </p>
+                          <p className="mt-1 text-[0.68rem] text-slate-400">기준 {formatLedgerAmount(item.target)}</p>
+                          <p className="mt-1 text-[0.68rem] text-slate-400">{item.meta}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </StatSection>
+            ) : null}
 
             <StatSection title="전월 대비 증감" description={`${prevMonthLabel}과 비교했어요.`}>
               <ComparisonGraphList items={comparisonGraphItems} previousLabel={prevMonthLabel} currentLabel={monthLabel} />
@@ -1252,7 +1380,7 @@ export default function LedgerStatsPage() {
               ) : (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between gap-3">
-                    <h3 className={cn("text-[0.82rem] font-semibold", activeCategorySection.labelClass)}>{activeCategorySection.title}</h3>
+                    <h3 className={cn("text-[0.78rem] font-semibold", activeCategorySection.labelClass)}>{activeCategorySection.title}</h3>
                     <p className="text-[0.72rem] text-slate-400">{activeCategorySection.items.length}개 카테고리</p>
                   </div>
                   <BreakdownDonutCard items={activeCategorySection.items} tone="category" centerLabel={activeCategorySection.centerLabel} />
@@ -1274,7 +1402,7 @@ export default function LedgerStatsPage() {
                     <div key={item.label} className="space-y-2">
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
-                          <p className="truncate text-[0.82rem] font-medium text-slate-800">{item.label}</p>
+                          <p className="truncate text-[0.76rem] font-medium text-slate-800">{item.label}</p>
                           <p className="mt-1 text-[0.72rem] text-slate-400">
                             {formatLedgerAmount(item.actualAmount)} / {formatLedgerAmount(item.plannedAmount)}
                           </p>
@@ -1335,6 +1463,10 @@ export default function LedgerStatsPage() {
             <StatSection title="태그별 사용">
               <TagStatList items={tagStats} emptyMessage="아직 태그가 달린 내역이 없습니다." />
             </StatSection>
+
+            <StatSection title="이번 달 포인트">
+              <HighlightDayCardList items={highlightDayCards} emptyMessage="아직 비교할 만한 내역이 없습니다." />
+            </StatSection>
           </>
         ) : null}
 
@@ -1362,7 +1494,16 @@ export default function LedgerStatsPage() {
                   })}
                 </div>
               ) : null}
-              <WeeklyGoalCompactList items={weeklyGoalStats} emptyMessage="아직 주간 목표를 계산할 예산이 없습니다." />
+              <WeeklyGoalOverviewCard
+                type={weeklyGoalFocusType}
+                actual={activeWeeklyGoalBudgetCard?.actual ?? 0}
+                target={activeWeeklyGoalBudgetCard?.target ?? 0}
+                progressRaw={activeWeeklyGoalBudgetCard?.progressRaw ?? 0}
+                remaining={activeWeeklyGoalBudgetCard?.remaining ?? 0}
+              />
+              <div className="mt-3">
+                <WeeklyGoalCompactList items={weeklyGoalStats} emptyMessage="아직 주간 목표를 계산할 예산이 없습니다." />
+              </div>
             </StatSection>
 
             <StatSection title="주차별 흐름">
@@ -1371,23 +1512,23 @@ export default function LedgerStatsPage() {
               ) : selectedFilter === "ALL" ? (
                 <div className="space-y-3">
                   {weeklyStats.map((item) => (
-                    <div key={item.label} className="grid grid-cols-[5.5rem_1fr] gap-3 rounded-xl bg-slate-50 px-3 py-3">
+                    <div key={item.label} className="grid grid-cols-[6.6rem_1fr] gap-3 rounded-xl bg-slate-50 px-3 py-3">
                       <div>
-                        <p className="text-[0.82rem] font-medium text-slate-700">{item.label}</p>
-                        <p className="mt-1 text-[0.68rem] text-slate-400">{item.rangeLabel}</p>
+                        <p className="text-[0.8rem] font-medium text-slate-700">{item.rangeLabel}</p>
+                        <p className="mt-1 text-[0.64rem] text-slate-400">{item.label}</p>
                       </div>
                       <div className="grid grid-cols-3 gap-2 text-right text-[0.72rem]">
                         <div>
                           <p className="text-slate-400">수입</p>
-                          <p className="mt-1 text-[0.82rem] font-semibold text-sky-500">{item.income > 0 ? formatLedgerAmount(item.income) : "-"}</p>
+                          <p className="mt-1 text-[0.58rem] font-semibold text-sky-500">{item.income > 0 ? formatLedgerAmount(item.income) : "-"}</p>
                         </div>
                         <div>
                           <p className="text-slate-400">지출</p>
-                          <p className="mt-1 text-[0.82rem] font-semibold text-rose-500">{item.expense > 0 ? formatLedgerAmount(item.expense) : "-"}</p>
+                          <p className="mt-1 text-[0.58rem] font-semibold text-rose-500">{item.expense > 0 ? formatLedgerAmount(item.expense) : "-"}</p>
                         </div>
                         <div>
                           <p className="text-slate-400">저축</p>
-                          <p className="mt-1 text-[0.82rem] font-semibold text-emerald-600">{item.saving > 0 ? formatLedgerAmount(item.saving) : "-"}</p>
+                          <p className="mt-1 text-[0.58rem] font-semibold text-emerald-600">{item.saving > 0 ? formatLedgerAmount(item.saving) : "-"}</p>
                         </div>
                       </div>
                     </div>
@@ -1403,14 +1544,14 @@ export default function LedgerStatsPage() {
                       selectedFilter === "INCOME" ? "bg-sky-500" : selectedFilter === "EXPENSE" ? "bg-rose-400" : "bg-emerald-600";
 
                     return (
-                      <div key={item.label} className="rounded-xl bg-slate-50 px-3 py-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-[0.82rem] font-medium text-slate-700">{item.label}</p>
-                            <p className="mt-1 text-[0.68rem] text-slate-400">{item.rangeLabel}</p>
+                        <div key={item.label} className="rounded-xl bg-slate-50 px-3 py-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-[0.8rem] font-medium text-slate-700">{item.rangeLabel}</p>
+                              <p className="mt-1 text-[0.64rem] text-slate-400">{item.label}</p>
+                            </div>
+                            <p className={cn("text-[0.58rem] font-semibold", amountClass)}>{formatLedgerAmount(item.selectedAmount)}</p>
                           </div>
-                          <p className={cn("text-[0.82rem] font-semibold", amountClass)}>{formatLedgerAmount(item.selectedAmount)}</p>
-                        </div>
                         <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
                           <div className={cn("h-full rounded-full", barClass)} style={{ width: `${getAmountBarWidth(percent)}%` }} />
                         </div>
@@ -1428,21 +1569,26 @@ export default function LedgerStatsPage() {
                 <div className="space-y-3">
                   {dailyStats.map((item) => (
                     <div key={item.dateToken} className="grid grid-cols-[5.5rem_1fr] gap-3 rounded-xl bg-slate-50 px-3 py-3">
-                      <Link to={buildLedgerDateLink(item.dateToken, monthToken, selectedFilter)} className="text-[0.82rem] font-medium text-slate-700">
-                        {item.label}
-                      </Link>
+                      <div>
+                        <Link to={buildLedgerDateLink(item.dateToken, monthToken, selectedFilter)} className="text-[0.82rem] font-medium text-slate-700">
+                          {item.label}
+                        </Link>
+                        <p className={cn("mt-1 text-[0.64rem] font-medium", item.netAmount >= 0 ? "text-sky-500" : "text-rose-500")}>
+                          {item.netAmount >= 0 ? formatLedgerAmount(item.netAmount) : `-${formatLedgerAmount(Math.abs(item.netAmount))}`}
+                        </p>
+                      </div>
                       <div className="grid grid-cols-3 gap-2 text-right text-[0.72rem]">
                         <div>
                           <p className="text-slate-400">수입</p>
-                          <p className="mt-1 text-[0.82rem] font-semibold text-sky-500">{item.income > 0 ? formatLedgerAmount(item.income) : "-"}</p>
+                          <p className="mt-1 text-[0.58rem] font-semibold text-sky-500">{item.income > 0 ? formatLedgerAmount(item.income) : "-"}</p>
                         </div>
                         <div>
                           <p className="text-slate-400">지출</p>
-                          <p className="mt-1 text-[0.82rem] font-semibold text-rose-500">{item.expense > 0 ? formatLedgerAmount(item.expense) : "-"}</p>
+                          <p className="mt-1 text-[0.58rem] font-semibold text-rose-500">{item.expense > 0 ? formatLedgerAmount(item.expense) : "-"}</p>
                         </div>
                         <div>
                           <p className="text-slate-400">저축</p>
-                          <p className="mt-1 text-[0.82rem] font-semibold text-emerald-600">{item.saving > 0 ? formatLedgerAmount(item.saving) : "-"}</p>
+                          <p className="mt-1 text-[0.58rem] font-semibold text-emerald-600">{item.saving > 0 ? formatLedgerAmount(item.saving) : "-"}</p>
                         </div>
                       </div>
                     </div>
@@ -1460,8 +1606,13 @@ export default function LedgerStatsPage() {
                     return (
                       <Link key={item.dateToken} to={buildLedgerDateLink(item.dateToken, monthToken, selectedFilter)} className="block rounded-xl bg-slate-50 px-3 py-3">
                         <div className="flex items-center justify-between gap-3">
-                          <p className="text-[0.82rem] font-medium text-slate-700">{item.label}</p>
-                          <p className={cn("text-[0.82rem] font-semibold", amountClass)}>{formatLedgerAmount(item.selectedAmount)}</p>
+                          <div>
+                            <p className="text-[0.82rem] font-medium text-slate-700">{item.label}</p>
+                            <p className={cn("mt-1 text-[0.64rem] font-medium", item.netAmount >= 0 ? "text-sky-500" : "text-rose-500")}>
+                              결과 {item.netAmount >= 0 ? formatLedgerAmount(item.netAmount) : `-${formatLedgerAmount(Math.abs(item.netAmount))}`}
+                            </p>
+                          </div>
+                          <p className={cn("text-[0.58rem] font-semibold", amountClass)}>{formatLedgerAmount(item.selectedAmount)}</p>
                         </div>
                         <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
                           <div className={cn("h-full rounded-full", barClass)} style={{ width: `${getAmountBarWidth(percent)}%` }} />
@@ -1544,10 +1695,10 @@ function TagStatList({ items, emptyMessage }: { items: TagBreakdownItem[]; empty
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="truncate text-[0.82rem] font-medium text-slate-800">{item.label}</p>
-               <p className="mt-1 text-[0.72rem] text-slate-400">연결 금액 {formatLedgerAmount(item.linkedAmount)}</p>
+              <p className="mt-1 text-[0.72rem] text-slate-400">연결 금액 {formatLedgerAmount(item.linkedAmount)}</p>
             </div>
             <div className="shrink-0 text-right">
-               <p className="text-[0.82rem] font-semibold text-slate-900">{item.count}건</p>
+              <p className="text-[0.82rem] font-semibold text-slate-900">{item.count}건</p>
               <p className="text-[0.72rem] text-slate-400">{item.percent}%</p>
             </div>
           </div>
@@ -1621,7 +1772,7 @@ function BudgetRiskList({
           <div key={item.label} className="rounded-xl bg-slate-50 px-3 py-3">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <p className="truncate text-[0.82rem] font-medium text-slate-800">{item.label}</p>
+                <p className="truncate text-[0.76rem] font-medium text-slate-800">{item.label}</p>
                 <p className="mt-1 text-[0.72rem] text-slate-400">
                   {formatLedgerAmount(item.actualAmount)} / {formatLedgerAmount(item.plannedAmount)}
                 </p>
@@ -1643,6 +1794,42 @@ function BudgetRiskList({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function WeeklyGoalOverviewCard({
+  type,
+  actual,
+  target,
+  progressRaw,
+  remaining,
+}: {
+  type: LedgerEntryTypeValue;
+  actual: number;
+  target: number;
+  progressRaw: number;
+  remaining: number;
+}) {
+  const meta = getBudgetMeta(type);
+  const summaryLabel =
+    type === "EXPENSE"
+      ? remaining >= 0
+        ? `남은 ${formatLedgerAmount(remaining)}`
+        : `초과 ${formatLedgerAmount(Math.abs(remaining))}`
+      : remaining >= 0
+        ? `남은 ${formatLedgerAmount(remaining)}`
+        : `초과 ${formatLedgerAmount(Math.abs(remaining))}`;
+
+  return (
+    <div className={cn("rounded-xl border border-slate-200 px-3 py-3", meta.softBgClass)}>
+      <p className="text-[0.78rem] font-medium text-slate-700">{meta.label}</p>
+      <p className={cn("mt-1 text-[0.9rem] font-semibold", meta.colorClass)}>
+        {formatLedgerAmount(actual)} / {formatLedgerAmount(target)}
+      </p>
+      <p className="mt-1 text-[0.72rem] text-slate-400">
+        {type === "EXPENSE" ? `사용률 ${progressRaw}%` : `달성률 ${progressRaw}%`} · {summaryLabel}
+      </p>
     </div>
   );
 }
@@ -1676,13 +1863,13 @@ function WeeklyGoalCompactList({
           return (
             <div key={item.label} className="rounded-xl bg-slate-50 px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-[0.8rem] font-medium text-slate-800">{item.label}</p>
-                  <p className="mt-1 text-[0.66rem] text-slate-400">{item.rangeLabel}</p>
-                </div>
+                  <div className="min-w-0">
+                    <p className="text-[0.8rem] font-medium text-slate-800">{item.rangeLabel}</p>
+                    <p className="mt-1 text-[0.64rem] text-slate-400">{item.label}</p>
+                  </div>
                 <div className="shrink-0 text-right">
                   <p className="text-[0.72rem] text-slate-500">
-                    {formatLedgerAmount(totalActual)} / {formatLedgerAmount(totalTarget)}
+                    {totalTarget > 0 ? `${formatLedgerAmount(totalActual)} / ${formatLedgerAmount(totalTarget)}` : "목표 없음"}
                   </p>
                   <button
                     type="button"
@@ -1691,7 +1878,7 @@ function WeeklyGoalCompactList({
                         current.includes(item.label) ? current.filter((label) => label !== item.label) : [...current, item.label],
                       )
                     }
-                    className="mt-1 text-[0.68rem] font-medium text-slate-500 transition-colors hover:text-slate-700"
+                    className="mt-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[0.64rem] font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
                   >
                     {isOpen ? "상세 닫기" : "상세보기"}
                   </button>
@@ -1722,10 +1909,10 @@ function WeeklyGoalCompactList({
                 {item.rates.map((rate) => (
                   <span
                     key={rate.id}
-                    className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[0.68rem] text-slate-600"
+                    className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[0.64rem] text-slate-600"
                   >
                     <span className={cn("font-medium", rate.labelClassName)}>{rate.label}</span>
-                    <span className="ml-1 text-slate-500">{roundPercent(rate.actual, totalTarget || 1)}%</span>
+                    <span className="ml-1 text-slate-500">{totalTarget > 0 ? `${roundPercent(rate.actual, totalTarget)}%` : "목표 없음"}</span>
                   </span>
                 ))}
               </div>
@@ -1746,14 +1933,14 @@ function WeeklyGoalCompactList({
                       <div key={rate.id} className="space-y-2">
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0">
-                            <p className={cn("text-[0.8rem] font-medium", rate.labelClassName)}>{rate.label}</p>
+                            <p className={cn("text-[0.74rem] font-medium", rate.labelClassName)}>{rate.label}</p>
                             <p className="mt-1 text-[0.68rem] text-slate-400">
                               {formatLedgerAmount(rate.actual)} / {formatLedgerAmount(rate.target)}
                             </p>
                           </div>
                           <div className="shrink-0 text-right">
-                            <p className="text-[0.78rem] font-semibold text-slate-800">{rate.progressRaw}%</p>
-                            <p className="text-[0.68rem] text-slate-400">{gapLabel}</p>
+                            <p className="text-[0.78rem] font-semibold text-slate-800">{rate.target > 0 ? `${rate.progressRaw}%` : "-"}</p>
+                            <p className="text-[0.68rem] text-slate-400">{rate.target > 0 ? gapLabel : "목표 없음"}</p>
                           </div>
                         </div>
                         <div className="h-3.5 overflow-hidden rounded-full bg-slate-200">
@@ -2027,30 +2214,36 @@ function BudgetRingCard({
   progressValue,
   progressRaw,
   remaining,
+  hasTarget,
   type,
 }: {
   label: string;
   actual: number;
   target: number;
   progressValue: number;
-  progressRaw: number;
-  remaining: number;
+  progressRaw: number | null;
+  remaining: number | null;
+  hasTarget: boolean;
   type: LedgerEntryTypeValue;
 }) {
   const meta = getBudgetMeta(type);
   const radius = 36;
   const circumference = 2 * Math.PI * radius;
   const strokeOffset = circumference - (circumference * progressValue) / 100;
-  const isExpenseOverBudget = type === "EXPENSE" && remaining < 0;
+  const isExpenseOverBudget = type === "EXPENSE" && remaining !== null && remaining < 0;
   const progressLabel = type === "EXPENSE" ? "사용률" : "달성률";
   const remainingLabel =
-    type === "EXPENSE"
-      ? remaining >= 0
-        ? `남은 ${formatLedgerAmount(remaining)}`
-        : `초과 ${formatLedgerAmount(Math.abs(remaining))}`
-      : remaining >= 0
-        ? `남은 ${formatLedgerAmount(remaining)}`
-        : `초과 ${formatLedgerAmount(Math.abs(remaining))}`;
+    !hasTarget
+      ? type === "EXPENSE"
+        ? "예산 미설정"
+        : "목표 미설정"
+      : type === "EXPENSE"
+        ? remaining! >= 0
+          ? `남은 ${formatLedgerAmount(remaining!)}`
+          : `초과 ${formatLedgerAmount(Math.abs(remaining!))}`
+        : remaining! >= 0
+          ? `남은 ${formatLedgerAmount(remaining!)}`
+          : `초과 ${formatLedgerAmount(Math.abs(remaining!))}`;
 
   return (
     <div
@@ -2064,7 +2257,7 @@ function BudgetRingCard({
         <div>
           <p className="text-[0.78rem] font-medium text-slate-700">{label}</p>
           <p className={cn("mt-1 text-[0.92rem] font-semibold", meta.colorClass)}>{formatLedgerAmount(actual)}</p>
-          <p className="mt-1 text-[0.72rem] text-slate-500">목표 {formatLedgerAmount(target)}</p>
+          <p className="mt-1 text-[0.72rem] text-slate-500">{hasTarget ? `목표 ${formatLedgerAmount(target)}` : "목표 미설정"}</p>
           <p className="mt-1 text-[0.72rem] text-slate-400">{remainingLabel}</p>
           {isExpenseOverBudget ? (
             <p className="mt-1 text-[0.72rem] font-medium text-rose-600">예산을 초과했어요. 지출을 줄여보세요.</p>
@@ -2095,10 +2288,10 @@ function BudgetRingCard({
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
             <p className={cn("text-[0.88rem] font-semibold", isExpenseOverBudget ? "text-rose-600" : "text-slate-900")}>
-              {progressRaw}%
+              {progressRaw === null ? "-" : `${progressRaw}%`}
             </p>
             <p className={cn("text-[0.68rem]", isExpenseOverBudget ? "text-rose-500" : "text-slate-400")}>
-              {progressLabel}
+              {progressRaw === null ? "목표 없음" : progressLabel}
             </p>
           </div>
         </div>
@@ -2106,5 +2299,3 @@ function BudgetRingCard({
     </div>
   );
 }
-
-

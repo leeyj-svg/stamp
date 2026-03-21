@@ -23,6 +23,7 @@ const LEGACY_DEFAULT_CATEGORY_NAMES = [
   "여행",
   "투자",
 ] as const;
+const CATEGORY_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
 export type CategoryFetcherData = {
   ok?: boolean;
@@ -76,12 +77,22 @@ const createCategorySchema = z.object({
   intent: z.literal("create_category"),
   type: z.enum(ENTRY_TYPES),
   name: z.string().trim().min(1).max(30),
+  color: z
+    .string()
+    .trim()
+    .optional()
+    .refine((value) => value === undefined || CATEGORY_COLOR_PATTERN.test(value), "카테고리 색상을 다시 확인해 주세요."),
 });
 
 const updateCategorySchema = z.object({
   intent: z.literal("update_category"),
   categoryId: z.coerce.number().int().positive(),
   name: z.string().trim().min(1).max(30),
+  color: z
+    .string()
+    .trim()
+    .optional()
+    .refine((value) => value === undefined || CATEGORY_COLOR_PATTERN.test(value), "카테고리 색상을 다시 확인해 주세요."),
 });
 
 const toggleCategorySchema = z.object({
@@ -149,6 +160,7 @@ export async function loadLedgerCategories(db: LedgerDbClient, userId: string) {
       id: true,
       type: true,
       name: true,
+      color: true,
       isActive: true,
       _count: {
         select: {
@@ -161,12 +173,13 @@ export async function loadLedgerCategories(db: LedgerDbClient, userId: string) {
   });
 
   return categories.map((category) => ({
-    id: category.id,
-    type: category.type,
-    name: category.name,
-    isActive: category.isActive,
-    entryCount: category._count.entries,
-    budgetAllocationCount: category._count.budgetAllocations,
+      id: category.id,
+      type: category.type,
+      name: category.name,
+      color: category.color,
+      isActive: category.isActive,
+      entryCount: category._count.entries,
+      budgetAllocationCount: category._count.budgetAllocations,
   }));
 }
 
@@ -187,17 +200,19 @@ export async function handleCategoryIntent(db: LedgerDbClient, userId: string, f
           name: parsed.data.name,
         },
       },
-      update: {
-        isActive: true,
-        sortOrder: 1,
-      },
-      create: {
-        userId,
-        type: parsed.data.type,
-        name: parsed.data.name,
-        sortOrder: 1,
-      },
-    });
+        update: {
+          isActive: true,
+          sortOrder: 1,
+          ...(parsed.data.color ? { color: parsed.data.color } : {}),
+        },
+        create: {
+          userId,
+          type: parsed.data.type,
+          name: parsed.data.name,
+          color: parsed.data.color,
+          sortOrder: 1,
+        },
+      });
 
     return jsonResponse({ ok: true, intent: "create_category" });
   }
@@ -237,6 +252,7 @@ export async function handleCategoryIntent(db: LedgerDbClient, userId: string, f
         name: parsed.data.name,
         isActive: true,
         sortOrder: 1,
+        ...(parsed.data.color ? { color: parsed.data.color } : {}),
       },
     });
 

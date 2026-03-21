@@ -1080,6 +1080,7 @@ export default function LedgerPage() {
                         showCurrentWeekBudget,
                         selectedCategoryIds,
                       )}
+                      reloadDocument
                     >
                       월 리스트 내역
                     </Link>
