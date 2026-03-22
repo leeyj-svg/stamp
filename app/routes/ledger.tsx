@@ -373,6 +373,11 @@ function formatCompactBudgetRangeLabel(start: Date, endExclusive: Date) {
   return `${startMonth}/${startDay}-${endMonth}/${endDay}`;
 }
 
+function getBudgetBoundaryDate(value: Date | string) {
+  const date = new Date(value);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+}
+
 function getBudgetDisplayAmount(type: LedgerEntryTypeValue, budgetAmount: number, actualAmount: number) {
   if (type === "EXPENSE") {
     return budgetAmount - actualAmount;
@@ -550,14 +555,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const budgetPeriods = Array.from(budgetPeriodsById.values());
   const entryRangeStart = budgetPeriods.reduce(
     (start, period) => {
-      const periodStartAt = new Date(period.periodStartAt);
+      const periodStartAt = getBudgetBoundaryDate(period.periodStartAt);
       return periodStartAt < start ? periodStartAt : start;
     },
     new Date(monthStart.getFullYear(), monthStart.getMonth(), 1, 0, 0, 0, 0),
   );
   const entryRangeEnd = budgetPeriods.reduce(
     (end, period) => {
-      const periodEndAt = new Date(period.periodEndAt);
+      const periodEndAt = getBudgetBoundaryDate(period.periodEndAt);
       return periodEndAt > end ? periodEndAt : end;
     },
     nextMonthStart,
@@ -703,8 +708,8 @@ export default function LedgerPage() {
   const primaryBudgetPeriod = useMemo(
     () =>
       budgetPeriods.find((period) => {
-        const periodStartAt = new Date(period.periodStartAt);
-        const periodEndAt = new Date(period.periodEndAt);
+        const periodStartAt = getBudgetBoundaryDate(period.periodStartAt);
+        const periodEndAt = getBudgetBoundaryDate(period.periodEndAt);
         return calendarMonth >= periodStartAt && calendarMonth < periodEndAt;
       }) ?? budgetPeriods[0] ?? null,
     [budgetPeriods, calendarMonth],
@@ -825,12 +830,14 @@ export default function LedgerPage() {
 
       const periodStartAt = new Date(period.periodStartAt);
       const periodEndAt = new Date(period.periodEndAt);
-      const weekRanges = getBudgetWeekRanges(periodStartAt, periodEndAt, settings.weekStartDay);
+      const normalizedPeriodStartAt = getBudgetBoundaryDate(period.periodStartAt);
+      const normalizedPeriodEndAt = getBudgetBoundaryDate(period.periodEndAt);
+      const weekRanges = getBudgetWeekRanges(normalizedPeriodStartAt, normalizedPeriodEndAt, settings.weekStartDay);
       if (weekRanges.length === 0) {
         continue;
       }
 
-      const dayCount = getBudgetPeriodDayCount(period);
+      const dayCount = getBudgetPeriodDayCount({ periodStartAt: normalizedPeriodStartAt, periodEndAt: normalizedPeriodEndAt });
       const dailyBudgetAmount = getBudgetScopeAmount(displayTotalAmount, "DAY", dayCount, 1);
       const weekRowByIndex = new Map(plan.weeks.map((week) => [week.weekIndex, week]));
       const fixedExpenseCategoryIds =
@@ -930,9 +937,9 @@ export default function LedgerPage() {
       const nextDate = addLedgerDays(currentDateStart, 1);
       const currentDateToken = getDateKey(currentDate);
       const matchingPeriod = budgetPeriods.find((period) => {
-        const periodStartAt = new Date(period.periodStartAt);
-        const periodEndAt = new Date(period.periodEndAt);
-        return currentDate >= periodStartAt && currentDate < periodEndAt;
+        const periodStartAt = getBudgetBoundaryDate(period.periodStartAt);
+        const periodEndAt = getBudgetBoundaryDate(period.periodEndAt);
+        return currentDateStart >= periodStartAt && currentDateStart < periodEndAt;
       });
 
       if (!matchingPeriod) {
@@ -956,11 +963,11 @@ export default function LedgerPage() {
         continue;
       }
 
-      const periodStartAt = new Date(matchingPeriod.periodStartAt);
-      const periodEndAt = new Date(matchingPeriod.periodEndAt);
+      const periodStartAt = getBudgetBoundaryDate(matchingPeriod.periodStartAt);
+      const periodEndAt = getBudgetBoundaryDate(matchingPeriod.periodEndAt);
       const periodDayCount = getBudgetPeriodDayCount({
-        periodStartAt: matchingPeriod.periodStartAt,
-        periodEndAt: matchingPeriod.periodEndAt,
+        periodStartAt,
+        periodEndAt,
       });
       const weekRanges = getBudgetWeekRanges(periodStartAt, periodEndAt, settings.weekStartDay);
       const weekRange =
@@ -1080,8 +1087,8 @@ export default function LedgerPage() {
 
     for (let cursor = new Date(currentWeekRange.start); cursor < currentWeekRange.end; cursor = addLedgerDays(cursor, 1)) {
       const matchingPeriod = budgetPeriods.find((period) => {
-        const periodStartAt = new Date(period.periodStartAt);
-        const periodEndAt = new Date(period.periodEndAt);
+        const periodStartAt = getBudgetBoundaryDate(period.periodStartAt);
+        const periodEndAt = getBudgetBoundaryDate(period.periodEndAt);
         return cursor >= periodStartAt && cursor < periodEndAt;
       });
       const dayBudget = budgetRemainingByDate.get(getDateKey(cursor))?.day;
