@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Form } from "react-router";
 import { ChevronDown, ImagePlus, Pencil, Plus, Settings2, Trash2 } from "lucide-react";
 
@@ -46,6 +46,13 @@ type RoutineRecordEditorProps = {
   title: string;
   description?: string;
   submitLabel: string;
+};
+
+type RoutinePhotoFieldProps = {
+  label: string;
+  inputName: "photo1" | "photo2";
+  removeName: "removePhoto1" | "removePhoto2";
+  currentUrl: string | null;
 };
 
 const ROUTINE_STATUS_OPTIONS: Array<{
@@ -102,9 +109,96 @@ function getTypeSummaryLabel(record: RoutineRecordItem | null) {
   return getStatusLabel(record.status);
 }
 
-function RoutineRecordEditor({ typeId, record, title, description, submitLabel }: RoutineRecordEditorProps) {
-  const recordPhotos = [record?.photoUrl1 ?? null, record?.photoUrl2 ?? null].filter((url): url is string => Boolean(url));
+function RoutinePhotoField({ label, inputName, removeName, currentUrl }: RoutinePhotoFieldProps) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [blobPreviewUrl, setBlobPreviewUrl] = useState<string | null>(null);
+  const [markedForRemoval, setMarkedForRemoval] = useState(false);
 
+  useEffect(() => {
+    setMarkedForRemoval(false);
+    setBlobPreviewUrl((current) => {
+      if (current) {
+        URL.revokeObjectURL(current);
+      }
+      return null;
+    });
+    if (inputRef.current) {
+      inputRef.current.value = "";
+    }
+  }, [currentUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (blobPreviewUrl) {
+        URL.revokeObjectURL(blobPreviewUrl);
+      }
+    };
+  }, [blobPreviewUrl]);
+
+  const displayUrl = blobPreviewUrl ?? (!markedForRemoval ? currentUrl : null);
+
+  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    setBlobPreviewUrl((current) => {
+      if (current) {
+        URL.revokeObjectURL(current);
+      }
+      return URL.createObjectURL(file);
+    });
+    setMarkedForRemoval(false);
+  }
+
+  function handleRemove() {
+    setBlobPreviewUrl((current) => {
+      if (current) {
+        URL.revokeObjectURL(current);
+      }
+      return null;
+    });
+    setMarkedForRemoval(Boolean(currentUrl));
+    if (inputRef.current) {
+      inputRef.current.value = "";
+    }
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-medium text-slate-500">{label}</p>
+        {displayUrl ? (
+          <button
+            type="button"
+            className="text-[10px] text-slate-400 transition-colors hover:text-rose-400"
+            onClick={handleRemove}
+          >
+            지우기
+          </button>
+        ) : null}
+      </div>
+      <input type="hidden" name={removeName} value={markedForRemoval ? "1" : "0"} />
+      <label className="group relative flex h-28 cursor-pointer overflow-hidden rounded-2xl border border-dashed border-slate-300 bg-white">
+        {displayUrl ? (
+          <img src={displayUrl} alt={label} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full flex-col items-center justify-center text-[11px] text-slate-400">
+            <ImagePlus className="mb-1.5 h-4 w-4" />
+            사진 선택
+          </div>
+        )}
+        <div className="pointer-events-none absolute inset-x-2 bottom-2 rounded-full bg-black/35 px-2 py-1 text-center text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
+          {displayUrl ? "사진 바꾸기" : "사진 찍기 또는 선택"}
+        </div>
+        <input ref={inputRef} type="file" name={inputName} accept="image/*" className="hidden" onChange={handleFileChange} />
+      </label>
+    </div>
+  );
+}
+
+function RoutineRecordEditor({ typeId, record, title, description, submitLabel }: RoutineRecordEditorProps) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
       <div className="mb-3 flex items-start justify-between gap-3">
@@ -168,29 +262,9 @@ function RoutineRecordEditor({ typeId, record, title, description, submitLabel }
         <div className="space-y-1.5">
           <p className="text-[11px] font-medium text-slate-500">인증 사진</p>
           <div className="grid grid-cols-2 gap-2">
-            <label className="flex h-20 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white text-[11px] text-slate-400">
-              <ImagePlus className="mb-1 h-4 w-4" />
-              사진 1
-              <input type="file" name="photo1" accept="image/*" capture="environment" className="hidden" />
-            </label>
-            <label className="flex h-20 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white text-[11px] text-slate-400">
-              <ImagePlus className="mb-1 h-4 w-4" />
-              사진 2
-              <input type="file" name="photo2" accept="image/*" capture="environment" className="hidden" />
-            </label>
+            <RoutinePhotoField label="사진 1" inputName="photo1" removeName="removePhoto1" currentUrl={record?.photoUrl1 ?? null} />
+            <RoutinePhotoField label="사진 2" inputName="photo2" removeName="removePhoto2" currentUrl={record?.photoUrl2 ?? null} />
           </div>
-          {recordPhotos.length > 0 ? (
-            <div className="grid grid-cols-2 gap-2">
-              {recordPhotos.map((photoUrl, index) => (
-                <img
-                  key={`${photoUrl}-${index}`}
-                  src={photoUrl}
-                  alt="루틴 인증 사진"
-                  className="h-24 w-full rounded-2xl object-cover"
-                />
-              ))}
-            </div>
-          ) : null}
         </div>
 
         <div className="space-y-1.5">
