@@ -1,6 +1,6 @@
-﻿import { useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { Form } from "react-router";
-import { ChevronDown, ImagePlus, Plus, Settings2, Trash2 } from "lucide-react";
+import { ChevronDown, ImagePlus, Pencil, Plus, Settings2, Trash2 } from "lucide-react";
 
 import { ColorSwatchInput } from "~/components/color-swatch-input";
 import { Button } from "~/components/ui/button";
@@ -98,6 +98,7 @@ function getTypeSummaryLabel(record: RoutineRecordItem | null) {
   if (!record) {
     return "미기록";
   }
+
   return getStatusLabel(record.status);
 }
 
@@ -216,14 +217,19 @@ function RoutineRecordEditor({ typeId, record, title, description, submitLabel }
 export function RoutinePanel({ routineTypes, dayNoteMemo }: RoutinePanelProps) {
   const [expandedTypeId, setExpandedTypeId] = useState<number | null>(null);
   const [isTypeManagerOpen, setIsTypeManagerOpen] = useState(false);
+  const hasDayNote = dayNoteMemo.trim().length > 0;
+  const [isDayNoteEditing, setIsDayNoteEditing] = useState(() => !hasDayNote);
 
   const completedCount = useMemo(() => routineTypes.filter((type) => type.todayRecord?.status === "SUCCESS").length, [routineTypes]);
   const totalRecordCount = useMemo(() => routineTypes.filter((type) => type.todayRecord !== null).length, [routineTypes]);
-
   const totalGoalCount = useMemo(
     () => routineTypes.reduce((sum, type) => sum + (type.weeklyGoalCount ?? 0), 0),
     [routineTypes],
   );
+
+  useEffect(() => {
+    setIsDayNoteEditing(!hasDayNote);
+  }, [hasDayNote]);
 
   return (
     <div className="space-y-4 bg-white px-3 py-4">
@@ -348,10 +354,7 @@ export function RoutinePanel({ routineTypes, dayNoteMemo }: RoutinePanelProps) {
                     <p className="mt-1 text-[11px] text-slate-400">
                       {record === null
                         ? "기록하기"
-                        : [
-                            recordTimeLabel,
-                            recordPhotos.length > 0 ? `사진 ${recordPhotos.length}장` : null,
-                          ]
+                        : [recordTimeLabel, recordPhotos.length > 0 ? `사진 ${recordPhotos.length}장` : null]
                             .filter(Boolean)
                             .join(" · ")}
                     </p>
@@ -376,26 +379,65 @@ export function RoutinePanel({ routineTypes, dayNoteMemo }: RoutinePanelProps) {
         </div>
       )}
 
-      <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
-        <div className="mb-2">
-          <p className="text-sm font-medium text-slate-800">하루 메모</p>
-          <p className="mt-1 text-[11px] text-slate-400">그날 느낌이나 체크한 걸 가볍게 남겨둘 수 있어요.</p>
-        </div>
-        <Form method="post" className="space-y-2">
-          <input type="hidden" name="intent" value="save_routine_day_note" />
-          <Textarea
-            name="memo"
-            defaultValue={dayNoteMemo}
-            rows={4}
-            className="min-h-[104px] border-slate-200 bg-slate-50 text-sm"
-            placeholder="오늘 루틴 메모"
-          />
-          <div className="flex justify-end">
-            <Button type="submit" className="h-9 rounded-full px-4 text-xs">
-              메모 저장
-            </Button>
-          </div>
-        </Form>
+      <div className="relative overflow-hidden rounded-[26px] border border-[#eadfcd] bg-[linear-gradient(140deg,#fffaf4_0%,#fffdf9_52%,#f4ebdf_100%)] px-3 py-3 shadow-[0_10px_28px_rgba(148,120,80,0.08)] before:pointer-events-none before:absolute before:inset-0 before:bg-[linear-gradient(transparent_0px,transparent_31px,rgba(183,160,132,0.10)_32px)] before:bg-[length:100%_32px]">
+        {hasDayNote && !isDayNoteEditing ? (
+          <>
+            <div className="relative rounded-[22px] border border-white/70 bg-[rgba(255,255,255,0.58)] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-[2px]">
+            <div className="mb-1 text-[1.6rem] leading-none text-[#d7c1a4]">"</div>
+            <p className="whitespace-pre-wrap px-1 text-[0.92rem] leading-8 text-[#5b4a39]">{dayNoteMemo}</p>
+            <div className="mt-1 flex justify-end pr-1 text-[1.6rem] leading-none text-[#d7c1a4]">"</div>
+            </div>
+            <div className="mt-2 flex justify-end gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-6 w-6 rounded-full p-0 text-[#cfbead] hover:bg-white/40 hover:text-[#a88e76]"
+                onClick={() => setIsDayNoteEditing(true)}
+                aria-label="메모 수정"
+              >
+                <Pencil className="h-3 w-3" />
+              </Button>
+              <Form method="post">
+                <input type="hidden" name="intent" value="save_routine_day_note" />
+                <input type="hidden" name="memo" value="" />
+                <Button
+                  type="submit"
+                  variant="ghost"
+                  className="h-6 w-6 rounded-full p-0 text-[#dbc8c6] hover:bg-white/40 hover:text-rose-300"
+                  aria-label="메모 삭제"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </Button>
+              </Form>
+            </div>
+          </>
+        ) : (
+          <Form method="post" className="space-y-2">
+            <input type="hidden" name="intent" value="save_routine_day_note" />
+            <Textarea
+              name="memo"
+              defaultValue={dayNoteMemo}
+              rows={4}
+              className="min-h-[110px] rounded-[22px] border-[#eadfcd] bg-white/70 text-sm text-[#5b4a39] placeholder:text-[#c2ad96]"
+              placeholder="오늘 하루를 짧게 남겨보세요"
+            />
+            <div className="flex justify-end gap-2">
+              {hasDayNote ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-9 rounded-full px-3 text-xs text-[#8c7258] hover:bg-white/60 hover:text-[#5c4935]"
+                  onClick={() => setIsDayNoteEditing(false)}
+                >
+                  취소
+                </Button>
+              ) : null}
+              <Button type="submit" className="h-9 rounded-full bg-[#6b5643] px-4 text-xs text-white hover:bg-[#5c4935]">
+                메모 저장
+              </Button>
+            </div>
+          </Form>
+        )}
       </div>
     </div>
   );
