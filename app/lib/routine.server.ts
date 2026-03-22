@@ -72,8 +72,10 @@ const saveRoutineRecordSchema = z.object({
   performedTime: z
     .string()
     .trim()
-    .optional()
-    .refine((value) => !value || /^\d{2}:\d{2}$/.test(value), "기록 시간을 다시 확인해 주세요."),
+      .optional()
+      .refine((value) => !value || /^\d{2}:\d{2}$/.test(value), "기록 시간을 다시 확인해 주세요."),
+  removePhoto1: z.preprocess((value) => value === "1" || value === "true", z.boolean()).default(false),
+  removePhoto2: z.preprocess((value) => value === "1" || value === "true", z.boolean()).default(false),
   memo: z.string().trim().max(300).optional(),
 });
 
@@ -115,21 +117,26 @@ function isFileLike(value: FormDataEntryValue | null): value is File {
   return typeof File !== "undefined" && value instanceof File && value.size > 0;
 }
 
-async function uploadRoutineImage(fileValue: FormDataEntryValue | null, currentUrl: string | null) {
-  if (!isFileLike(fileValue)) {
-    return currentUrl;
+async function resolveRoutineImage(fileValue: FormDataEntryValue | null, currentUrl: string | null, shouldRemove: boolean) {
+  if (isFileLike(fileValue)) {
+    const uploaded = await processAndUploadImage(fileValue);
+    if (!uploaded?.url) {
+      return currentUrl;
+    }
+
+    if (currentUrl && currentUrl !== uploaded.url) {
+      await deleteImage(currentUrl);
+    }
+
+    return uploaded.url;
   }
 
-  const uploaded = await processAndUploadImage(fileValue);
-  if (!uploaded?.url) {
-    return currentUrl;
-  }
-
-  if (currentUrl && currentUrl !== uploaded.url) {
+  if (shouldRemove && currentUrl) {
     await deleteImage(currentUrl);
+    return null;
   }
 
-  return uploaded.url;
+  return currentUrl;
 }
 
 export function formatRoutineTimeValue(value: string | null) {
@@ -414,8 +421,8 @@ export async function saveRoutineRecord(db: RoutineDbClient, userId: string, ref
           orderBy: [{ createdAt: "desc" }],
         });
 
-  const nextPhotoUrl1 = await uploadRoutineImage(formData.get("photo1"), existingRecord?.photoUrl1 ?? null);
-  const nextPhotoUrl2 = await uploadRoutineImage(formData.get("photo2"), existingRecord?.photoUrl2 ?? null);
+  const nextPhotoUrl1 = await resolveRoutineImage(formData.get("photo1"), existingRecord?.photoUrl1 ?? null, parsed.data.removePhoto1);
+  const nextPhotoUrl2 = await resolveRoutineImage(formData.get("photo2"), existingRecord?.photoUrl2 ?? null, parsed.data.removePhoto2);
   const performedAt = combineDateAndTime(referenceDate, parsed.data.performedTime);
   const memo = parsed.data.memo?.trim() || null;
 
