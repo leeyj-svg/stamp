@@ -303,7 +303,7 @@ export function buildWeeklyBudgetStateByDate(params: {
     }
 
     const dayCount = getBudgetPeriodDayCount(period);
-    const fallbackPlannedAmount = getBudgetScopeAmount(displayTotalAmount, "WEEK", dayCount, weekRanges.length);
+    const dailyBudgetAmount = getBudgetScopeAmount(displayTotalAmount, "DAY", dayCount, 1);
     const weekRowByIndex = new Map(plan.weeks.map((week) => [week.weekIndex, week]));
     const fixedExpenseCategoryIds = budgetFocusType === "EXPENSE" ? getFixedExpenseCategoryIds(plan.allocations) : new Set<number>();
     let rollingCarry = 0;
@@ -312,8 +312,9 @@ export function buildWeeklyBudgetStateByDate(params: {
       const weekIndex = index + 1;
       const range = weekRanges[index];
       const weekRow = weekRowByIndex.get(weekIndex);
-      const plannedAmount =
-        budgetFocusType === "EXPENSE" ? fallbackPlannedAmount : Number(weekRow?.plannedAmount ?? fallbackPlannedAmount);
+      const rangeDayCount = Math.max(1, getBudgetPeriodDayCount({ periodStartAt: range.start, periodEndAt: range.end }));
+      const fallbackPlannedAmount = Math.round(dailyBudgetAmount * rangeDayCount * 100) / 100;
+      const plannedAmount = Number(weekRow?.plannedAmount ?? fallbackPlannedAmount);
       const spentAmount = budgetStatsEntries.reduce((sum, entry) => {
         const usedAt = new Date(entry.usedAt);
         if (usedAt < range.start || usedAt >= range.end) {
@@ -344,7 +345,7 @@ export function buildWeeklyBudgetStateByDate(params: {
         displayDateToken: getDateKey(displayDate),
         target: targetAmount,
         value,
-        dayBudget: targetAmount / weekDayCount,
+        dayBudget: dailyBudgetAmount,
       });
 
       if (plan.weekCarryMode === "AUTO") {

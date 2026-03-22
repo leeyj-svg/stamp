@@ -1,5 +1,5 @@
 ﻿import { Form, Link, redirect, useLoaderData, type ActionFunctionArgs, type LoaderFunctionArgs } from "react-router";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type MouseEvent } from "react";
 import { ArrowLeft, MoreVertical } from "lucide-react";
 
 import { Button } from "~/components/ui/button";
@@ -16,6 +16,7 @@ import {
   cloneLedgerBudgetPeriodData,
   ensureLedgerBudgetTemplatePeriod,
   hasLedgerBudgetData,
+  resetAllLedgerBudgetPeriodsFromTemplate,
   sumAllocatedTotalsByType,
   sumPlanTotalsByType,
 } from "~/lib/ledger-budget.server";
@@ -103,7 +104,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const intent = formData.get("intent");
 
-  if (intent === "update_settings") {
+  if (intent === "update_settings" || intent === "apply_defaults_everywhere") {
     const { settings: currentSettings, period: currentTemplatePeriod } = await ensureLedgerBudgetTemplatePeriod(db, user.id);
     const defaultPeriodBasis = parsePeriodBasis(formData.get("defaultPeriodBasis"));
     const weekStartDay = parseWeekStartDay(formData.get("weekStartDay"));
@@ -141,6 +142,53 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (basisChanged && hasLedgerBudgetData(currentTemplatePeriod)) {
       const { period: nextTemplatePeriod } = await ensureLedgerBudgetTemplatePeriod(db, user.id);
       await cloneLedgerBudgetPeriodData(db, currentTemplatePeriod.id, nextTemplatePeriod.id);
+    }
+
+    if (intent === "apply_defaults_everywhere") {
+      const { period: templatePeriod } = await ensureLedgerBudgetTemplatePeriod(db, user.id);
+      const allocatedByType = sumAllocatedTotalsByType(templatePeriod.plans);
+      const totalsByType = {
+        EXPENSE: 0,
+        INCOME: 0,
+        SAVING: 0,
+      } satisfies Record<LedgerEntryTypeValue, number>;
+
+      for (const type of LEDGER_BUDGET_TYPE_ORDER) {
+        const amountField = formData.get(`quickTotalBudget_${type}`);
+        const amount = typeof amountField === "string" ? parseBudgetInput(amountField) : 0;
+
+        if (!Number.isFinite(amount) || amount < 0) {
+          return redirectWithToast(request, "error", `${getBudgetSectionMeta(type).totalLabel}은 0 이상의 숫자로 입력해 주세요.`);
+        }
+
+        if (amount < allocatedByType[type]) {
+          return redirectWithToast(
+            request,
+            "error",
+            `${getBudgetSectionMeta(type).saveErrorLabel}은 이미 배정한 금액 ${formatLedgerAmount(allocatedByType[type])}보다 작을 수 없습니다.`,
+          );
+        }
+
+        totalsByType[type] = amount;
+      }
+
+      await db.$transaction(
+        templatePeriod.plans.map((plan) =>
+          db.ledgerBudgetPlan.update({
+            where: { id: plan.id },
+            data: {
+              totalAmount: totalsByType[plan.type],
+            },
+          }),
+        ),
+      );
+
+      const result = await resetAllLedgerBudgetPeriodsFromTemplate(db, user.id);
+      return redirectWithToast(
+        request,
+        "success",
+        `기본 설정을 저장하고 ${result.resetCount}개의 월 예산을 기본값으로 다시 덮어썼습니다.`,
+      );
     }
 
     return redirectWithToast(request, "success", "가계부 기준 설정을 저장했습니다.");
@@ -195,6 +243,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 export default function LedgerSettingsPage() {
   const { settings, currentMonthToken, budgetSummaryByType } = useLoaderData<typeof loader>();
   const [selectedBudgetType, setSelectedBudgetType] = useState<LedgerEntryTypeValue>("EXPENSE");
+  const [defaultPeriodBasis, setDefaultPeriodBasis] = useState<LedgerPeriodBasisValue>(settings.defaultPeriodBasis);
+  const [paydayDay, setPaydayDay] = useState(String(settings.paydayDay ?? 25));
+  const [weekStartDay, setWeekStartDay] = useState<LedgerWeekStartDayValue>(settings.weekStartDay);
   const [quickBudgetTotals, setQuickBudgetTotals] = useState<Record<LedgerEntryTypeValue, string>>(
     Object.fromEntries(
       budgetSummaryByType.map((summary) => [summary.type, formatBudgetInput(summary.totalAmount)]),
@@ -205,6 +256,13 @@ export default function LedgerSettingsPage() {
     [budgetSummaryByType, selectedBudgetType],
   );
   const selectedBudgetAccent = getTypeAccent(selectedBudgetType);
+
+  function handleConfirmApplyDefaultsEverywhere(event: MouseEvent<HTMLButtonElement>) {
+    const confirmed = window.confirm("현재 기본 설정으로 모든 월 예산을 다시 덮어쓸까요?");
+    if (!confirmed) {
+      event.preventDefault();
+    }
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -260,14 +318,15 @@ export default function LedgerSettingsPage() {
               <label
                 className={cn(
                   "flex cursor-pointer items-center rounded-2xl px-4 py-2 text-xs font-medium transition-colors",
-                  settings.defaultPeriodBasis === "CALENDAR" ? "text-slate-900" : "text-slate-600",
+                  defaultPeriodBasis === "CALENDAR" ? "text-slate-900" : "text-slate-600",
                 )}
               >
                 <input
                   type="radio"
                   name="defaultPeriodBasis"
                   value="CALENDAR"
-                  defaultChecked={settings.defaultPeriodBasis === "CALENDAR"}
+                  checked={defaultPeriodBasis === "CALENDAR"}
+                  onChange={() => setDefaultPeriodBasis("CALENDAR")}
                   className="h-3.5 w-3.5 shrink-0 accent-slate-900"
                 />
                 <span className="ml-2">1일부터</span>
@@ -276,14 +335,15 @@ export default function LedgerSettingsPage() {
               <label
                 className={cn(
                   "flex min-w-0 cursor-pointer items-center gap-2 rounded-2xl px-4 py-2 text-xs font-medium transition-colors",
-                  settings.defaultPeriodBasis === "PAYDAY" ? "text-slate-900" : "text-slate-600",
+                  defaultPeriodBasis === "PAYDAY" ? "text-slate-900" : "text-slate-600",
                 )}
               >
                 <input
                   type="radio"
                   name="defaultPeriodBasis"
                   value="PAYDAY"
-                  defaultChecked={settings.defaultPeriodBasis === "PAYDAY"}
+                  checked={defaultPeriodBasis === "PAYDAY"}
+                  onChange={() => setDefaultPeriodBasis("PAYDAY")}
                   className="h-3.5 w-3.5 shrink-0 accent-slate-900"
                 />
                 <span className="ml-2 shrink-0">급여</span>
@@ -292,7 +352,8 @@ export default function LedgerSettingsPage() {
                     type="number"
                     min={1}
                   max={31}
-                  defaultValue={settings.paydayDay ?? 25}
+                  value={paydayDay}
+                  onChange={(event) => setPaydayDay(event.target.value)}
                   className="h-7 w-16 rounded-xl border-slate-200 px-2 text-center text-xs"
                 />
                 <span className="shrink-0">일</span>
@@ -304,32 +365,34 @@ export default function LedgerSettingsPage() {
               <div className="grid grid-cols-2 gap-2">
                 <label
                   className={cn(
-                    "flex cursor-pointer items-center rounded-2xl px-4 py-2 text-xs font-medium transition-colors",
-                    settings.weekStartDay === "MONDAY" ? "text-slate-900" : "text-slate-600",
+                      "flex cursor-pointer items-center rounded-2xl px-4 py-2 text-xs font-medium transition-colors",
+                      weekStartDay === "MONDAY" ? "text-slate-900" : "text-slate-600",
                   )}
                 >
-                  <input
-                    type="radio"
-                    name="weekStartDay"
-                    value="MONDAY"
-                    defaultChecked={settings.weekStartDay === "MONDAY"}
-                    className="h-3.5 w-3.5 shrink-0 accent-slate-900"
-                  />
+                   <input
+                     type="radio"
+                     name="weekStartDay"
+                     value="MONDAY"
+                     checked={weekStartDay === "MONDAY"}
+                     onChange={() => setWeekStartDay("MONDAY")}
+                     className="h-3.5 w-3.5 shrink-0 accent-slate-900"
+                   />
                   <span className="ml-2">월요일 시작</span>
                 </label>
                 <label
                   className={cn(
-                    "flex cursor-pointer items-center rounded-2xl px-4 py-2 text-xs font-medium transition-colors",
-                    settings.weekStartDay === "SUNDAY" ? "text-slate-900" : "text-slate-600",
+                      "flex cursor-pointer items-center rounded-2xl px-4 py-2 text-xs font-medium transition-colors",
+                      weekStartDay === "SUNDAY" ? "text-slate-900" : "text-slate-600",
                   )}
                 >
-                  <input
-                    type="radio"
-                    name="weekStartDay"
-                    value="SUNDAY"
-                    defaultChecked={settings.weekStartDay === "SUNDAY"}
-                    className="h-3.5 w-3.5 shrink-0 accent-slate-900"
-                  />
+                   <input
+                     type="radio"
+                     name="weekStartDay"
+                     value="SUNDAY"
+                     checked={weekStartDay === "SUNDAY"}
+                     onChange={() => setWeekStartDay("SUNDAY")}
+                     className="h-3.5 w-3.5 shrink-0 accent-slate-900"
+                   />
                   <span className="ml-2">일요일 시작</span>
                 </label>
               </div>
@@ -360,10 +423,12 @@ export default function LedgerSettingsPage() {
           </div>
 
           <Form method="post" className="space-y-2">
-            <input type="hidden" name="intent" value="save_budget_totals" />
             {LEDGER_BUDGET_TYPE_ORDER.map((type) => (
               <input key={type} type="hidden" name={`quickTotalBudget_${type}`} value={quickBudgetTotals[type] ?? ""} />
             ))}
+            <input type="hidden" name="defaultPeriodBasis" value={defaultPeriodBasis} />
+            <input type="hidden" name="paydayDay" value={paydayDay} />
+            <input type="hidden" name="weekStartDay" value={weekStartDay} />
 
             <div className="grid grid-cols-3 gap-1.5">
               {LEDGER_BUDGET_TYPE_ORDER.map((type) => {
@@ -411,9 +476,21 @@ export default function LedgerSettingsPage() {
 
             <div className="flex items-center justify-between gap-2">
               <p className="text-[11px] text-slate-500">여기서는 월 총액만 빠르게 바꾸고, 카테고리별 배정은 상세 설정에서 이어서 할 수 있어요.</p>
-              <Button type="submit" className="h-8 shrink-0 rounded-xl bg-slate-900 px-4 text-xs hover:bg-slate-800">
-                총액 저장
-              </Button>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  type="submit"
+                  name="intent"
+                  value="apply_defaults_everywhere"
+                  variant="outline"
+                  className="h-8 rounded-xl border-slate-200 px-4 text-xs"
+                  onClick={handleConfirmApplyDefaultsEverywhere}
+                >
+                  전체 덮어쓰기
+                </Button>
+                <Button type="submit" name="intent" value="save_budget_totals" className="h-8 rounded-xl bg-slate-900 px-4 text-xs hover:bg-slate-800">
+                  총액 저장
+                </Button>
+              </div>
             </div>
           </Form>
         </section>

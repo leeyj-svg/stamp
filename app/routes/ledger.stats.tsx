@@ -1387,14 +1387,17 @@ export default function LedgerStatsPage() {
               </div>
 
               <div className="mt-3 rounded-xl bg-slate-50 px-3 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-[0.78rem] font-medium text-slate-700">이번 달 남은 금액</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[0.78rem] font-medium text-slate-700">가용 금액</p>
+                    <p className="mt-1 text-[0.68rem] text-slate-400">수입 - 지출 - 저축</p>
+                  </div>
                   <p className={cn("text-[0.88rem] font-semibold", netResult >= 0 ? "text-sky-500" : "text-rose-500")}>
                     {formatLedgerAmount(netResult)}
                   </p>
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-3">
-                  <p className="text-[0.72rem] text-slate-400">계획상 남은 금액</p>
+                  <p className="text-[0.72rem] text-slate-400">계획상 가용 금액</p>
                   <p className="text-[0.78rem] font-medium text-slate-500">{formatLedgerAmount(budgetNetTarget)}</p>
                 </div>
               </div>
