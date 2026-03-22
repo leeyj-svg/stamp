@@ -14,11 +14,13 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover";
 import { getSessionWithPermission } from "~/lib/auth.server";
 import {
+  addLedgerDays,
   getBudgetDisplayTotalAmount,
   getBudgetPeriodDayCount,
   getBudgetScopeAmount,
   getBudgetWeekRanges,
   getFixedExpenseCategoryIds,
+  getStartOfBudgetWeek,
 } from "~/lib/ledger-budget";
 import {
   applyManualCarryToCurrentLedgerWeek,
@@ -614,6 +616,14 @@ export default function LedgerPage() {
     () => new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1, 0, 0, 0, 0),
     [calendarMonth],
   );
+  const visibleCalendarStart = useMemo(
+    () => getStartOfBudgetWeek(calendarMonth, settings.weekStartDay),
+    [calendarMonth, settings.weekStartDay],
+  );
+  const visibleCalendarEnd = useMemo(
+    () => addLedgerDays(getStartOfBudgetWeek(monthEnd, settings.weekStartDay), 7),
+    [monthEnd, settings.weekStartDay],
+  );
   const today = useMemo(() => new Date(), []);
   const todayMonthToken = getMonthToken(today);
   const todayDateToken = getDateKey(today);
@@ -621,14 +631,18 @@ export default function LedgerPage() {
   const selectedBudgetDisplaySet = useMemo(() => new Set<BudgetDisplayOption>(selectedDisplayOptions), [selectedDisplayOptions]);
   const canShowCurrentWeekBudget = monthToken === todayMonthToken && currentWeekBudget !== null;
   const currentWeekRange = useMemo(
-    () =>
-      currentWeekBudget
-        ? {
-            start: new Date(currentWeekBudget.weekStartAt),
-            end: new Date(currentWeekBudget.weekEndAt),
-          }
-        : null,
-    [currentWeekBudget],
+    () => {
+      if (!canShowCurrentWeekBudget) {
+        return null;
+      }
+
+      const start = getStartOfBudgetWeek(today, settings.weekStartDay);
+      return {
+        start,
+        end: addLedgerDays(start, 7),
+      };
+    },
+    [canShowCurrentWeekBudget, settings.weekStartDay, today],
   );
   const currentWeekVisibleStartToken = useMemo(() => {
     if (!currentWeekRange) {
@@ -651,6 +665,16 @@ export default function LedgerPage() {
       }) ?? budgetPeriods[0] ?? null,
     [budgetPeriods, calendarMonth],
   );
+  const budgetStartDateTokens = useMemo(() => {
+    return new Set(
+      budgetPeriods
+        .map((period) => getDateKey(new Date(period.periodStartAt)))
+        .filter((dateToken) => {
+          const date = new Date(`${dateToken}T12:00:00`);
+          return date >= visibleCalendarStart && date < visibleCalendarEnd;
+        }),
+    );
+  }, [budgetPeriods, visibleCalendarEnd, visibleCalendarStart]);
   const currentBudgetPlan = useMemo(
     () => primaryBudgetPeriod?.plans.find((plan) => plan.type === budgetFocusType) ?? null,
     [budgetFocusType, primaryBudgetPeriod],
@@ -721,7 +745,7 @@ export default function LedgerPage() {
       }
 
       const dayCount = getBudgetPeriodDayCount(period);
-      const fallbackPlannedAmount = getBudgetScopeAmount(displayTotalAmount, "WEEK", dayCount, weekRanges.length);
+      const dailyBudgetAmount = getBudgetScopeAmount(displayTotalAmount, "DAY", dayCount, 1);
       const weekRowByIndex = new Map(plan.weeks.map((week) => [week.weekIndex, week]));
       const fixedExpenseCategoryIds =
         budgetFocusType === "EXPENSE" ? getFixedExpenseCategoryIds(plan.allocations) : new Set<number>();
@@ -731,8 +755,9 @@ export default function LedgerPage() {
         const weekIndex = index + 1;
         const range = weekRanges[index];
         const weekRow = weekRowByIndex.get(weekIndex);
-        const plannedAmount =
-          budgetFocusType === "EXPENSE" ? fallbackPlannedAmount : Number(weekRow?.plannedAmount ?? fallbackPlannedAmount);
+        const rangeDayCount = Math.max(1, getBudgetPeriodDayCount({ periodStartAt: range.start, periodEndAt: range.end }));
+        const fallbackPlannedAmount = Math.round(dailyBudgetAmount * rangeDayCount * 100) / 100;
+        const plannedAmount = Number(weekRow?.plannedAmount ?? fallbackPlannedAmount);
         const spentAmount = budgetStatsEntries.reduce((sum, entry) => {
           const usedAt = new Date(entry.usedAt);
           if (usedAt < range.start || usedAt >= range.end) {
@@ -758,13 +783,11 @@ export default function LedgerPage() {
               : 0;
         const targetAmount = Math.round((plannedAmount + carryInAmount) * 100) / 100;
         const value = getBudgetDisplayAmount(budgetFocusType, targetAmount, spentAmount);
-        const weekDayCount = Math.max(1, getBudgetPeriodDayCount({ periodStartAt: range.start, periodEndAt: range.end }));
-        const dayBudget = targetAmount / weekDayCount;
 
         weeklyState.set(getDateKey(range.start), {
           target: targetAmount,
           value,
-          dayBudget,
+          dayBudget: dailyBudgetAmount,
         });
 
         if (plan.weekCarryMode === "AUTO") {
@@ -816,10 +839,9 @@ export default function LedgerPage() {
         month: { value: number; target: number } | null;
       }
     >();
-    for (let dayNumber = 1; dayNumber <= monthEnd.getDate(); dayNumber += 1) {
-      const currentDate = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), dayNumber, 12, 0, 0, 0);
-      const currentDateStart = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), dayNumber, 0, 0, 0, 0);
-      const nextDate = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), dayNumber + 1, 0, 0, 0, 0);
+    for (let currentDate = new Date(visibleCalendarStart); currentDate < visibleCalendarEnd; currentDate = addLedgerDays(currentDate, 1)) {
+      const currentDateStart = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate(), 0, 0, 0, 0);
+      const nextDate = addLedgerDays(currentDateStart, 1);
       const currentDateToken = getDateKey(currentDate);
       const matchingPeriod = budgetPeriods.find((period) => {
         const periodStartAt = new Date(period.periodStartAt);
@@ -857,7 +879,6 @@ export default function LedgerPage() {
       const weekRanges = getBudgetWeekRanges(periodStartAt, periodEndAt, settings.weekStartDay);
       const weekRange =
         weekRanges.find((range) => currentDate >= range.start && currentDate < range.end) ?? { start: periodStartAt, end: periodEndAt };
-      const weekCount = Math.max(weekRanges.length, 1);
       const fixedExpenseCategoryIds =
         budgetFocusType === "EXPENSE" ? getFixedExpenseCategoryIds(matchingPlan.allocations) : new Set<number>();
 
@@ -866,7 +887,12 @@ export default function LedgerPage() {
           return 0;
         }
 
-        return getBudgetScopeAmount(displayTotalAmount, scope, periodDayCount, weekCount);
+        if (scope === "WEEK") {
+          const rangeDayCount = Math.max(1, getBudgetPeriodDayCount({ periodStartAt: weekRange.start, periodEndAt: weekRange.end }));
+          return getBudgetScopeAmount(displayTotalAmount, "DAY", periodDayCount, 1) * rangeDayCount;
+        }
+
+        return getBudgetScopeAmount(displayTotalAmount, scope, periodDayCount, 1);
       };
 
       const getSpentAmount = (scope: "MONTH" | "WEEK" | "DAY") => {
@@ -894,7 +920,7 @@ export default function LedgerPage() {
 
       const monthBudgetAmount = getBudgetAmount("MONTH");
       const weekBudgetState = weeklyBudgetStateByDate.get(getDateKey(weekRange.start)) ?? null;
-      const dayBudgetAmount = budgetFocusType === "EXPENSE" && weekBudgetState ? weekBudgetState.dayBudget : getBudgetAmount("DAY");
+      const dayBudgetAmount = getBudgetAmount("DAY");
       const monthSpent = getSpentAmount("MONTH");
       const daySpent = getSpentAmount("DAY");
       const shouldShowDayBudget = selectedBudgetDisplaySet.has("SHOW_DAY_BUDGET");
@@ -939,7 +965,29 @@ export default function LedgerPage() {
     selectedBudgetDisplaySet,
     settings.weekStartDay,
     showCurrentWeekBudget,
+    visibleCalendarEnd,
+    visibleCalendarStart,
   ]);
+  const currentWeekInlineAmount = useMemo(() => {
+    if (!currentWeekRange) {
+      return currentWeekBudget?.displayAmount ?? null;
+    }
+
+    let accumulatedValue = 0;
+    let hasVisibleBudget = false;
+
+    for (let cursor = new Date(currentWeekRange.start); cursor < currentWeekRange.end; cursor = addLedgerDays(cursor, 1)) {
+      const dayBudget = budgetRemainingByDate.get(getDateKey(cursor))?.day;
+      if (!dayBudget) {
+        continue;
+      }
+
+      accumulatedValue += dayBudget.value;
+      hasVisibleBudget = true;
+    }
+
+    return hasVisibleBudget ? accumulatedValue : (currentWeekBudget?.displayAmount ?? null);
+  }, [budgetRemainingByDate, currentWeekBudget, currentWeekRange]);
 
   const toggleBudgetDisplay = (option: BudgetDisplayOption) => {
     navigate(
@@ -1291,7 +1339,10 @@ export default function LedgerPage() {
                       </button>
                       {showCurrentWeekBudget && currentWeekBudget ? (
                         <span className="text-[10px] font-medium text-slate-500">
-                          {getCurrentWeekBudgetInlineLabel(budgetFocusType, currentWeekBudget.displayAmount)}
+                          {getCurrentWeekBudgetInlineLabel(
+                            budgetFocusType,
+                            currentWeekInlineAmount ?? currentWeekBudget.displayAmount,
+                          )}
                         </span>
                       ) : null}
                     </div>
@@ -1356,7 +1407,7 @@ export default function LedgerPage() {
         <Calendar
           mode="single"
           locale={ko}
-          showOutsideDays={false}
+          showOutsideDays
           month={calendarMonth}
           onSelect={openDateRoute}
           disableNavigation
@@ -1381,13 +1432,21 @@ export default function LedgerPage() {
             DayButton: ({ day, modifiers, className, ...props }) => {
               const daySummary = dailySummaryByDate.get(getDateKey(day.date)) ?? { income: 0, expense: 0, saving: 0 };
               const dayBudget = budgetRemainingByDate.get(getDateKey(day.date)) ?? { day: null, week: null, month: null };
+              const isBudgetStartDate = budgetStartDateTokens.has(getDateKey(day.date));
               const dayOfWeek = day.date.getDay();
+              const isOutsideMonth = modifiers.outside;
               const isToday = getDateKey(day.date) === todayDateToken;
               const isInCurrentWeekRange =
                 showCurrentWeekBudget && currentWeekRange ? day.date >= currentWeekRange.start && day.date < currentWeekRange.end : false;
               const dateColorClass =
                 isToday
                   ? "text-white"
+                  : isOutsideMonth
+                    ? dayOfWeek === 0
+                      ? "text-rose-200"
+                      : dayOfWeek === 6
+                        ? "text-sky-300"
+                        : "text-slate-300"
                   : dayOfWeek === 0
                     ? "text-rose-400"
                     : dayOfWeek === 6
@@ -1401,7 +1460,10 @@ export default function LedgerPage() {
                   className={cn(
                     className,
                     "flex h-full min-h-[7.25rem] w-full min-w-0 flex-col items-start justify-between rounded-none bg-white px-1 py-1 text-left hover:bg-slate-50",
+                    isOutsideMonth && "bg-slate-50/70 hover:bg-slate-50",
                     isInCurrentWeekRange && "bg-amber-50/70",
+                    isBudgetStartDate &&
+                      "before:pointer-events-none before:absolute before:left-0 before:top-0 before:h-3 before:w-3 before:border-l before:border-t before:border-rose-300",
                     isToday && "bg-slate-100",
                   )}
                   {...props}
@@ -1416,13 +1478,13 @@ export default function LedgerPage() {
                     {day.date.getDate()}
                   </span>
                   <div className="flex w-full flex-col items-end gap-0.5 text-right">
-                    <span className="min-h-[0.72rem] truncate text-[0.58rem] font-medium leading-none text-sky-500">
+                    <span className={cn("min-h-[0.72rem] truncate text-[0.58rem] font-medium leading-none", isOutsideMonth ? "text-sky-300" : "text-sky-500")}>
                       {getDailyAmountText(daySummary.income)}
                     </span>
-                    <span className="min-h-[0.72rem] truncate text-[0.58rem] font-medium leading-none text-rose-400">
+                    <span className={cn("min-h-[0.72rem] truncate text-[0.58rem] font-medium leading-none", isOutsideMonth ? "text-rose-300" : "text-rose-400")}>
                       {getDailyAmountText(daySummary.expense)}
                     </span>
-                    <span className="min-h-[0.72rem] truncate text-[0.58rem] font-medium leading-none text-emerald-600">
+                    <span className={cn("min-h-[0.72rem] truncate text-[0.58rem] font-medium leading-none", isOutsideMonth ? "text-emerald-300" : "text-emerald-600")}>
                       {getDailyAmountText(daySummary.saving)}
                     </span>
                     {isDisplayOptionsOpen && dayBudget.month !== null ? (
@@ -1430,6 +1492,7 @@ export default function LedgerPage() {
                         className={cn(
                           "min-h-[0.72rem] truncate text-[0.58rem] font-medium leading-none",
                           getBudgetDisplayTextClass(budgetFocusType, dayBudget.month.value, dayBudget.month.target),
+                          isOutsideMonth && "opacity-60",
                         )}
                       >
                         {formatBudgetRemainingText(dayBudget.month.value)}
@@ -1440,6 +1503,7 @@ export default function LedgerPage() {
                         className={cn(
                           "min-h-[0.72rem] truncate text-[0.58rem] font-medium leading-none",
                           getBudgetDisplayTextClass(budgetFocusType, dayBudget.week.value, dayBudget.week.target),
+                          isOutsideMonth && "opacity-60",
                         )}
                       >
                         {formatBudgetRemainingText(dayBudget.week.value)}
@@ -1450,6 +1514,7 @@ export default function LedgerPage() {
                         className={cn(
                           "min-h-[0.72rem] truncate text-[0.58rem] font-medium leading-none",
                           getBudgetDisplayTextClass(budgetFocusType, dayBudget.day.value, dayBudget.day.target),
+                          isOutsideMonth && "opacity-60",
                         )}
                       >
                         {formatBudgetRemainingText(dayBudget.day.value)}

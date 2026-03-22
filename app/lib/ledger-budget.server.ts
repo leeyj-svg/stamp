@@ -91,8 +91,7 @@ async function syncLedgerBudgetWeeks(
 ) {
   const weekRanges = getBudgetWeekRanges(periodStartAt, periodEndAt, weekStartDay);
   const dayCount = getBudgetPeriodDayCount({ periodStartAt, periodEndAt });
-  const weekCount = Math.max(weekRanges.length, 1);
-  const plannedAmount = roundBudgetAmount(getBudgetScopeAmount(totalAmount, "WEEK", dayCount, weekCount));
+  const dailyBudgetAmount = roundBudgetAmount(getBudgetScopeAmount(totalAmount, "DAY", dayCount, 1));
   const existingWeeks = await db.ledgerBudgetWeekPlan.findMany({
     where: { planId },
     orderBy: { weekIndex: "asc" },
@@ -103,6 +102,8 @@ async function syncLedgerBudgetWeeks(
     const weekIndex = index + 1;
     const range = weekRanges[index];
     const existingWeek = existingWeekByIndex.get(weekIndex);
+    const rangeDayCount = Math.max(1, getBudgetPeriodDayCount({ periodStartAt: range.start, periodEndAt: range.end }));
+    const plannedAmount = roundBudgetAmount(dailyBudgetAmount * rangeDayCount);
 
     if (!existingWeek) {
       await db.ledgerBudgetWeekPlan.create({
@@ -340,7 +341,6 @@ export async function resetAllLedgerBudgetPeriodsFromTemplate(db: LedgerDbClient
   const targetPeriods = await db.ledgerBudgetPeriod.findMany({
     where: {
       userId,
-      basis: template.period.basis,
       id: {
         not: template.period.id,
       },
