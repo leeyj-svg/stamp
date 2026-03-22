@@ -349,6 +349,36 @@ function getTypeStatMeta(type: LedgerEntryTypeValue) {
   };
 }
 
+function formatSignedPercent(value: number) {
+  return `${value > 0 ? "+" : ""}${value}%`;
+}
+
+function getComparisonDeltaMeta(type: LedgerEntryTypeValue | "NET", delta: number, current: number, previous: number) {
+  const displayDelta = type === "EXPENSE" ? -delta : delta;
+  const rawPercent = previous > 0 ? Math.round((delta / previous) * 100) : current > 0 ? 100 : 0;
+  const displayPercent = type === "EXPENSE" ? -rawPercent : rawPercent;
+
+  let deltaLabel = "0%";
+  if (previous > 0) {
+    deltaLabel = formatSignedPercent(displayPercent);
+  } else if (current > 0) {
+    deltaLabel = "신규";
+  }
+
+  let deltaClassName = "text-slate-500";
+  if (displayDelta > 0) {
+    deltaClassName = type === "SAVING" ? "text-emerald-600" : "text-sky-500";
+  } else if (displayDelta < 0) {
+    deltaClassName = "text-rose-500";
+  }
+
+  return {
+    displayDelta,
+    deltaLabel,
+    deltaClassName,
+  };
+}
+
 function getDonutPalette(tone: DonutTone) {
   if (tone === "payment") {
     return ["#fb7185", "#f97316", "#f59e0b", "#ef4444", "#f43f5e", "#fda4af"];
@@ -447,17 +477,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     tagNames: entry.tags.map((item) => item.tag.name),
   });
 
-  const [currentBudgetResult, previousBudgetResult] = await Promise.all([
-    ensureLedgerBudgetPeriodForDate(db, user.id, monthStart),
-    (async () => {
-      const referenceDate = new Date(monthStart);
-      referenceDate.setDate(referenceDate.getDate() - 1);
-      return ensureLedgerBudgetPeriodForDate(db, user.id, referenceDate);
-    })(),
-  ]);
-
+  const currentBudgetResult = await ensureLedgerBudgetPeriodForDate(db, user.id, monthStart);
   const currentPeriodStart = new Date(currentBudgetResult.period.periodStartAt);
   const currentPeriodEnd = new Date(currentBudgetResult.period.periodEndAt);
+  const previousPeriodReference = new Date(currentPeriodStart);
+  previousPeriodReference.setDate(previousPeriodReference.getDate() - 1);
+  const previousBudgetResult = await ensureLedgerBudgetPeriodForDate(db, user.id, previousPeriodReference);
+
   const previousPeriodStart = new Date(previousBudgetResult.period.periodStartAt);
   const previousPeriodEnd = new Date(previousBudgetResult.period.periodEndAt);
 
@@ -784,17 +810,17 @@ export default function LedgerStatsPage() {
       const current = summary[key];
       const previous = previousSummary[key];
       const delta = current - previous;
-      const deltaPercent = previous > 0 ? Math.round((delta / previous) * 100) : current > 0 ? 100 : 0;
-      const deltaLabel = previous > 0 ? `${deltaPercent > 0 ? "+" : ""}${deltaPercent}%` : current > 0 ? "신규" : "0%";
       const meta = getBudgetMeta(type);
+      const comparisonMeta = getComparisonDeltaMeta(type, delta, current, previous);
 
       return {
         type,
         label: getTypeLabel(type),
         current,
         previous,
-        delta,
-        deltaLabel,
+        delta: comparisonMeta.displayDelta,
+        deltaLabel: comparisonMeta.deltaLabel,
+        deltaClassName: comparisonMeta.deltaClassName,
         meta,
       };
     });
@@ -806,6 +832,7 @@ export default function LedgerStatsPage() {
       previous: card.previous,
       delta: card.delta,
       deltaLabel: card.deltaLabel,
+      deltaClassName: card.deltaClassName,
       valueClassName: card.meta.colorClass,
       barClassName:
         card.type === "INCOME" ? "bg-sky-500" : card.type === "EXPENSE" ? "bg-rose-400" : "bg-emerald-600",
@@ -813,15 +840,15 @@ export default function LedgerStatsPage() {
 
     if (selectedFilter === "ALL") {
       const netDelta = netResult - previousNetResult;
-      const netDeltaPercent =
-        previousNetResult !== 0 ? Math.round((netDelta / Math.abs(previousNetResult)) * 100) : netResult !== 0 ? 100 : 0;
+      const comparisonMeta = getComparisonDeltaMeta("NET", netDelta, netResult, Math.abs(previousNetResult));
 
       items.push({
         label: "남은 금액",
         current: netResult,
         previous: previousNetResult,
-        delta: netDelta,
-        deltaLabel: previousNetResult !== 0 ? `${netDeltaPercent > 0 ? "+" : ""}${netDeltaPercent}%` : netResult !== 0 ? "신규" : "0%",
+        delta: comparisonMeta.displayDelta,
+        deltaLabel: comparisonMeta.deltaLabel,
+        deltaClassName: comparisonMeta.deltaClassName,
         valueClassName: netResult >= 0 ? "text-sky-500" : "text-rose-500",
         barClassName: netResult >= 0 ? "bg-sky-500" : "bg-rose-400",
       });
@@ -2173,6 +2200,7 @@ function ComparisonGraphList({
     previous: number;
     delta: number;
     deltaLabel: string;
+    deltaClassName: string;
     valueClassName: string;
     barClassName: string;
   }>;
@@ -2192,7 +2220,7 @@ function ComparisonGraphList({
             <div className="flex items-center justify-between gap-3">
               <p className="text-[0.82rem] font-medium text-slate-800">{item.label}</p>
               <div className="text-right">
-                <p className={cn("text-[0.78rem] font-semibold", item.delta === 0 ? "text-slate-500" : item.valueClassName)}>
+                <p className={cn("text-[0.78rem] font-semibold", item.delta === 0 ? "text-slate-500" : item.deltaClassName)}>
                   {formatSignedLedgerAmount(item.delta)}
                 </p>
                 <p className="text-[0.68rem] text-slate-400">{item.deltaLabel}</p>
