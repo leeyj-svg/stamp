@@ -932,9 +932,9 @@ export default function LedgerPage() {
       const shouldShowMonthBudget = selectedBudgetDisplaySet.has("SHOW_MONTH_BUDGET") && getDateKey(monthDisplayDate) === currentDateToken;
       const isCurrentWeekDate =
         showCurrentWeekBudget &&
-        currentWeekBudget !== null &&
-        currentDate >= new Date(currentWeekBudget.weekStartAt) &&
-        currentDate < new Date(currentWeekBudget.weekEndAt);
+        currentWeekRange !== null &&
+        currentDate >= currentWeekRange.start &&
+        currentDate < currentWeekRange.end;
 
       budgetMap.set(currentDateToken, {
         day:
@@ -958,6 +958,7 @@ export default function LedgerPage() {
     budgetPeriods,
     calendarMonth,
     currentWeekBudget,
+    currentWeekRange,
     currentWeekVisibleStartToken,
     entries,
     monthEnd,
