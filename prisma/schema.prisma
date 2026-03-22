@@ -52,6 +52,12 @@ enum LedgerWeekCarryMode {
   MANUAL
 }
 
+enum RoutineRecordStatus {
+  SUCCESS
+  FAIL
+  SKIPPED
+}
+
 model User {
   id          String     @id @default(cuid())
   name        String
@@ -84,6 +90,9 @@ model User {
   ledgerBudgetPeriods        LedgerBudgetPeriod[]
   ledgerEntries              LedgerEntry[]
   ledgerTags                 LedgerTag[]
+  routineTypes               RoutineType[]
+  routineRecords             RoutineRecord[]
+  routineDayNotes            RoutineDayNote[]
 }
 
 model LedgerSettings {
@@ -257,6 +266,60 @@ model LedgerEntryTag {
 
   @@id([entryId, tagId])
   @@index([tagId])
+}
+
+model RoutineType {
+  id        Int      @id @default(autoincrement())
+  userId    String
+  name      String
+  color     String?
+  weeklyGoalCount Int?
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  records RoutineRecord[]
+
+  @@unique([userId, name])
+  @@index([userId, sortOrder, isActive])
+}
+
+model RoutineRecord {
+  id          Int                 @id @default(autoincrement())
+  userId      String
+  typeId      Int
+  status      RoutineRecordStatus @default(SUCCESS)
+  recordDate  DateTime
+  performedAt DateTime?
+  photoUrl1   String?
+  photoUrl2   String?
+  memo        String?             @db.Text
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  user User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type RoutineType @relation(fields: [typeId], references: [id], onDelete: Cascade)
+
+  @@index([userId, recordDate])
+  @@index([userId, status, recordDate])
+  @@index([userId, typeId, recordDate])
+  @@index([typeId, recordDate])
+}
+
+model RoutineDayNote {
+  id         Int      @id @default(autoincrement())
+  userId     String
+  recordDate DateTime
+  memo       String?  @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, recordDate])
+  @@index([userId, recordDate])
 }
 
 model Session {

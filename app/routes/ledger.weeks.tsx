@@ -1,7 +1,8 @@
-import { Link, useLoaderData, type LoaderFunctionArgs } from "react-router";
-import { useMemo, useState } from "react";
+import { Link, useLoaderData, useNavigate, type LoaderFunctionArgs } from "react-router";
+import { useMemo, useState, type TouchEvent } from "react";
 import { ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, MoreVertical } from "lucide-react";
 
+import { RoutineWeekPanel } from "~/components/routine-week-panel";
 import { Button } from "~/components/ui/button";
 import {
   DropdownMenu,
@@ -43,6 +44,8 @@ import {
 import { ensureLedgerSetup, getMonthToken, shiftMonthToken } from "~/lib/ledger";
 import { cn } from "~/lib/utils";
 
+type WeekPanelView = "ledger" | "routine";
+
 function getAmountClass(type: LedgerEntryTypeValue) {
   if (type === "INCOME") {
     return "text-sky-500";
@@ -62,10 +65,31 @@ function formatWeekRangeLabel(start: Date, end: Date) {
   return `${start.getMonth() + 1}/${start.getDate()} - ${displayEnd.getMonth() + 1}/${displayEnd.getDate()}`;
 }
 
+function parseWeekPanelView(value: string | null): WeekPanelView {
+  return value === "routine" ? "routine" : "ledger";
+}
+
+function buildWeekPanelLink(
+  monthToken: string,
+  filter: "ALL" | LedgerEntryTypeValue,
+  displayParam: string | null,
+  showCurrentWeekBudget: boolean,
+  selectedCategoryIds: number[] = [],
+  panelView: WeekPanelView = "ledger",
+) {
+  const baseLink = buildLedgerWeekListLink(monthToken, filter, displayParam, showCurrentWeekBudget, selectedCategoryIds);
+  if (panelView === "ledger") {
+    return baseLink;
+  }
+
+  return `${baseLink}${baseLink.includes("?") ? "&" : "?"}panel=routine`;
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { user } = await getSessionWithPermission(request, "USER");
   await ensureLedgerSetup(db, user.id);
   const { loadLedgerCategories } = await import("~/lib/ledger-entry.server");
+  const { loadRoutineCalendarRecords, loadRoutineTypes } = await import("~/lib/routine.server");
 
   const url = new URL(request.url);
   const today = new Date();
@@ -74,6 +98,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const selectedFilter = parseEntryFilter(url.searchParams.get("type"));
   const selectedCategoryIdsRaw = parseCategoryIds(url.searchParams);
   const showCurrentWeekBudget = parseCurrentWeekBudgetView(url.searchParams.get("currentWeek"));
+  const selectedPanelView = parseWeekPanelView(url.searchParams.get("panel"));
   const displayParam = url.searchParams.get("display");
   const budgetFocusType: LedgerEntryTypeValue = selectedFilter === "ALL" ? "EXPENSE" : selectedFilter;
   const monthStart = getMonthStart(monthToken);
@@ -115,6 +140,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const budgetPeriods = Array.from(budgetPeriodsById.values());
+  const monthWeekRanges = getMonthWeekRanges(monthStart, nextMonthStart, startBudgetResult.settings.weekStartDay);
+  const routineRangeStart = monthWeekRanges[0]?.start ?? monthStart;
+  const routineRangeEnd = monthWeekRanges[monthWeekRanges.length - 1]?.end ?? nextMonthStart;
+
   const entryRangeStart = budgetPeriods.reduce(
     (start, period) => {
       const periodStartAt = new Date(period.periodStartAt);
@@ -130,28 +159,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     nextMonthStart,
   );
 
-  const entries = await db.ledgerEntry.findMany({
-    where: {
-      userId: user.id,
-      usedAt: {
-        gte: entryRangeStart,
-        lt: entryRangeEnd,
+  const [entries, routineTypes, routineRecords] = await Promise.all([
+    db.ledgerEntry.findMany({
+      where: {
+        userId: user.id,
+        usedAt: {
+          gte: entryRangeStart,
+          lt: entryRangeEnd,
+        },
       },
-    },
-    include: {
-      category: {
-        select: { name: true },
-      },
-      tags: {
-        select: {
-          tag: {
-            select: { name: true },
+      include: {
+        category: {
+          select: { name: true },
+        },
+        tags: {
+          select: {
+            tag: {
+              select: { name: true },
+            },
           },
         },
       },
-    },
-    orderBy: [{ usedAt: "desc" }, { createdAt: "desc" }],
-  });
+      orderBy: [{ usedAt: "desc" }, { createdAt: "desc" }],
+    }),
+    loadRoutineTypes(db, user.id),
+    loadRoutineCalendarRecords(db, user.id, routineRangeStart, routineRangeEnd),
+  ]);
 
   const selectedCategoryIds =
     selectedFilter !== "ALL"
@@ -173,6 +206,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     nextMonthToken: shiftMonthToken(monthToken, 1),
     selectedFilter,
     selectedCategoryIds,
+    selectedPanelView,
     showCurrentWeekBudget,
     displayParam,
     budgetFocusType,
@@ -210,6 +244,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       categoryName: entry.category?.name ?? null,
       tagNames: entry.tags.map((item) => item.tag.name),
     })),
+    routineTypes: routineTypes.map((type: any) => ({
+      id: type.id,
+      name: type.name,
+      color: type.color,
+      weeklyGoalCount: type.weeklyGoalCount,
+    })),
+    routineRecords: routineRecords.map((record: any) => ({
+      id: record.id,
+      typeId: record.typeId,
+      status: record.status,
+      recordDate: record.recordDate.toISOString(),
+    })),
   };
 };
 
@@ -221,6 +267,7 @@ export default function LedgerWeeksPage() {
     nextMonthToken,
     selectedFilter,
     selectedCategoryIds,
+    selectedPanelView,
     showCurrentWeekBudget,
     displayParam,
     budgetFocusType,
@@ -229,8 +276,12 @@ export default function LedgerWeeksPage() {
     budgetPeriods,
     categories,
     entries,
+    routineTypes,
+    routineRecords,
   } = useLoaderData<typeof loader>();
+  const navigate = useNavigate();
   const [isCategoryFiltersExpanded, setIsCategoryFiltersExpanded] = useState(false);
+  const [touchStartPoint, setTouchStartPoint] = useState<{ x: number; y: number } | null>(null);
   const monthStart = useMemo(() => getMonthStart(monthToken), [monthToken]);
   const nextMonthStart = useMemo(
     () => new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1, 0, 0, 0, 0),
@@ -349,7 +400,7 @@ export default function LedgerWeeksPage() {
   const shouldShowCategoryFilters = !canCollapseCategoryFilters || isCategoryFiltersExpanded || selectedCategoryIds.length > 0;
 
   const buildCategoryLink = (categoryId: number) =>
-    buildLedgerWeekListLink(
+    buildWeekPanelLink(
       monthToken,
       selectedFilter,
       displayParam,
@@ -357,7 +408,60 @@ export default function LedgerWeeksPage() {
       selectedCategoryIds.includes(categoryId)
         ? selectedCategoryIds.filter((id) => id !== categoryId)
         : [...selectedCategoryIds, categoryId],
+      selectedPanelView,
     );
+
+  const ledgerPanelLink = buildWeekPanelLink(
+    monthToken,
+    selectedFilter,
+    displayParam,
+    showCurrentWeekBudget,
+    selectedCategoryIds,
+    "ledger",
+  );
+  const routinePanelLink = buildWeekPanelLink(
+    monthToken,
+    selectedFilter,
+    displayParam,
+    showCurrentWeekBudget,
+    selectedCategoryIds,
+    "routine",
+  );
+
+  const moveToPanel = (nextPanelView: WeekPanelView) => {
+    if (nextPanelView === selectedPanelView) {
+      return;
+    }
+
+    navigate(nextPanelView === "ledger" ? ledgerPanelLink : routinePanelLink);
+  };
+
+  const handleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+    setTouchStartPoint({ x: touch.clientX, y: touch.clientY });
+  };
+
+  const handleTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    if (!touchStartPoint) {
+      return;
+    }
+
+    const touch = event.changedTouches[0];
+    const deltaX = touch.clientX - touchStartPoint.x;
+    const deltaY = touch.clientY - touchStartPoint.y;
+    setTouchStartPoint(null);
+
+    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY)) {
+      return;
+    }
+
+    if (deltaX < 0) {
+      moveToPanel("routine");
+      return;
+    }
+
+    moveToPanel("ledger");
+  };
 
   return (
     <div className="min-h-screen bg-white">
@@ -371,15 +475,38 @@ export default function LedgerWeeksPage() {
 
           <div className="flex items-center gap-1">
             <Button asChild variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-700">
-              <Link to={buildLedgerWeekListLink(prevMonthToken, selectedFilter, displayParam, showCurrentWeekBudget, selectedCategoryIds)}>
+              <Link to={buildWeekPanelLink(prevMonthToken, selectedFilter, displayParam, showCurrentWeekBudget, selectedCategoryIds, selectedPanelView)}>
                 <ChevronLeft className="h-6 w-6" />
               </Link>
             </Button>
             <div className="min-w-0 text-center">
               <h1 className="text-[1.15rem] font-semibold text-slate-900">{monthLabel}</h1>
+              <div className="mt-1 inline-flex items-center gap-1.5 text-[10px] leading-none">
+                <button
+                  type="button"
+                  onClick={() => moveToPanel("ledger")}
+                  className={cn(
+                    "border-b px-0 py-0 transition-colors",
+                    selectedPanelView === "ledger" ? "border-slate-700 text-slate-800" : "border-transparent text-slate-400",
+                  )}
+                >
+                  가계부
+                </button>
+                <span className="text-slate-300">|</span>
+                <button
+                  type="button"
+                  onClick={() => moveToPanel("routine")}
+                  className={cn(
+                    "border-b px-0 py-0 transition-colors",
+                    selectedPanelView === "routine" ? "border-slate-700 text-slate-800" : "border-transparent text-slate-400",
+                  )}
+                >
+                  루틴
+                </button>
+              </div>
             </div>
             <Button asChild variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-700">
-              <Link to={buildLedgerWeekListLink(nextMonthToken, selectedFilter, displayParam, showCurrentWeekBudget, selectedCategoryIds)}>
+              <Link to={buildWeekPanelLink(nextMonthToken, selectedFilter, displayParam, showCurrentWeekBudget, selectedCategoryIds, selectedPanelView)}>
                 <ChevronRight className="h-6 w-6" />
               </Link>
             </Button>
@@ -418,160 +545,180 @@ export default function LedgerWeeksPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 border-b bg-white">
-        <Link
-          to={buildLedgerWeekListLink(monthToken, toggleEntryFilter(selectedFilter, "INCOME"), displayParam, showCurrentWeekBudget)}
-          className={cn("py-3 text-center transition-colors", selectedFilter === "INCOME" ? "bg-sky-50" : "hover:bg-slate-50")}
+      <div className="overflow-x-hidden" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+        <div
+          className={cn(
+            "flex w-[200%] items-start transition-transform duration-300 ease-out",
+            selectedPanelView === "routine" ? "-translate-x-1/2" : "translate-x-0",
+          )}
         >
-          <p className="text-[0.82rem] font-medium text-slate-900">수입</p>
-          <p className="mt-1 text-[0.82rem] font-semibold text-sky-500">{formatLedgerAmount(summary.income)}</p>
-        </Link>
-        <Link
-          to={buildLedgerWeekListLink(monthToken, toggleEntryFilter(selectedFilter, "EXPENSE"), displayParam, showCurrentWeekBudget)}
-          className={cn("py-3 text-center transition-colors", selectedFilter === "EXPENSE" ? "bg-rose-50" : "hover:bg-slate-50")}
-        >
-          <p className="text-[0.82rem] font-medium text-slate-900">지출</p>
-          <p className="mt-1 text-[0.82rem] font-semibold text-rose-400">{formatLedgerAmount(summary.expense)}</p>
-        </Link>
-        <Link
-          to={buildLedgerWeekListLink(monthToken, toggleEntryFilter(selectedFilter, "SAVING"), displayParam, showCurrentWeekBudget)}
-          className={cn("py-3 text-center transition-colors", selectedFilter === "SAVING" ? "bg-emerald-50" : "hover:bg-slate-50")}
-        >
-          <p className="text-[0.82rem] font-medium text-slate-900">저축</p>
-          <p className="mt-1 text-[0.82rem] font-semibold text-emerald-600">{formatLedgerAmount(summary.saving)}</p>
-        </Link>
-      </div>
-
-      {selectedFilter !== "ALL" && categories.length > 0 ? (
-        <div className="border-b bg-white px-2 py-2">
-          <div className="space-y-1">
-            {canCollapseCategoryFilters ? (
-              <button
-                type="button"
-                className="flex w-full items-center justify-between rounded-md px-1 py-0.5 text-[10px] font-medium text-slate-500 transition-colors hover:bg-slate-50"
-                onClick={() => setIsCategoryFiltersExpanded((open) => !open)}
+          <div className="w-1/2 shrink-0">
+            <div className="grid grid-cols-3 border-b bg-white">
+              <Link
+                to={buildWeekPanelLink(monthToken, toggleEntryFilter(selectedFilter, "INCOME"), displayParam, showCurrentWeekBudget, [], selectedPanelView)}
+                className={cn("py-3 text-center transition-colors", selectedFilter === "INCOME" ? "bg-sky-50" : "hover:bg-slate-50")}
               >
-                <span>카테고리 {categories.length}개</span>
-                <ChevronDown className={cn("h-3.5 w-3.5 transition-transform duration-200", shouldShowCategoryFilters && "rotate-180")} />
-              </button>
-            ) : null}
-            {shouldShowCategoryFilters ? (
-              <div className="overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                <div className="inline-flex gap-1.5">
-                  {categories.map((category) => (
-                    <Link
-                      key={category.id}
-                      to={buildCategoryLink(category.id)}
-                      className={cn(
-                        "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-medium transition-colors",
-                        getCategoryChipClass(selectedFilter, selectedCategoryIds.includes(category.id)),
-                      )}
+                <p className="text-[0.82rem] font-medium text-slate-900">수입</p>
+                <p className="mt-1 text-[0.82rem] font-semibold text-sky-500">{formatLedgerAmount(summary.income)}</p>
+              </Link>
+              <Link
+                to={buildWeekPanelLink(monthToken, toggleEntryFilter(selectedFilter, "EXPENSE"), displayParam, showCurrentWeekBudget, [], selectedPanelView)}
+                className={cn("py-3 text-center transition-colors", selectedFilter === "EXPENSE" ? "bg-rose-50" : "hover:bg-slate-50")}
+              >
+                <p className="text-[0.82rem] font-medium text-slate-900">지출</p>
+                <p className="mt-1 text-[0.82rem] font-semibold text-rose-400">{formatLedgerAmount(summary.expense)}</p>
+              </Link>
+              <Link
+                to={buildWeekPanelLink(monthToken, toggleEntryFilter(selectedFilter, "SAVING"), displayParam, showCurrentWeekBudget, [], selectedPanelView)}
+                className={cn("py-3 text-center transition-colors", selectedFilter === "SAVING" ? "bg-emerald-50" : "hover:bg-slate-50")}
+              >
+                <p className="text-[0.82rem] font-medium text-slate-900">저축</p>
+                <p className="mt-1 text-[0.82rem] font-semibold text-emerald-600">{formatLedgerAmount(summary.saving)}</p>
+              </Link>
+            </div>
+
+            {selectedFilter !== "ALL" && categories.length > 0 ? (
+              <div className="border-b bg-white px-2 py-2">
+                <div className="space-y-1">
+                  {canCollapseCategoryFilters ? (
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between rounded-md px-1 py-0.5 text-[10px] font-medium text-slate-500 transition-colors hover:bg-slate-50"
+                      onClick={() => setIsCategoryFiltersExpanded((open) => !open)}
                     >
-                      {category.name}
-                    </Link>
-                  ))}
+                      <span>카테고리 {categories.length}개</span>
+                      <ChevronDown className={cn("h-3.5 w-3.5 transition-transform duration-200", shouldShowCategoryFilters && "rotate-180")} />
+                    </button>
+                  ) : null}
+                  {shouldShowCategoryFilters ? (
+                    <div className="overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                      <div className="inline-flex gap-1.5">
+                        {categories.map((category) => (
+                          <Link
+                            key={category.id}
+                            to={buildCategoryLink(category.id)}
+                            className={cn(
+                              "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-medium transition-colors",
+                              getCategoryChipClass(selectedFilter, selectedCategoryIds.includes(category.id)),
+                            )}
+                          >
+                            {category.name}
+                          </Link>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ) : null}
-          </div>
-        </div>
-      ) : null}
 
-      <div className="pb-20">
-        {weekGroups.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-slate-500">아직 등록된 내역이 없습니다.</div>
-        ) : (
-          weekGroups.map((group) => (
-            <section key={group.id} className={cn("border-b bg-white", group.isCurrentWeek ? "bg-amber-50/50" : "")}>
-              <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-2">
-                <p className="text-[0.84rem] font-semibold text-slate-800">{group.label}</p>
-                {group.weekBudget ? (
-                  <p
-                    className={cn(
-                      "shrink-0 text-[0.76rem] font-semibold",
-                      budgetFocusType === "EXPENSE"
-                        ? group.weekBudget.value < 0
-                          ? "text-rose-500"
-                          : "text-slate-600"
-                        : budgetFocusType === "INCOME"
-                          ? "text-sky-500"
-                          : "text-emerald-600",
-                    )}
-                  >
-                    {formatLedgerAmount(group.weekBudget.value)}
-                  </p>
-                ) : null}
-              </div>
-
-              {group.dateGroups.length === 0 ? (
-                <div className="px-4 py-5 text-center text-[0.76rem] text-slate-400">이 주에는 내역이 없습니다.</div>
+            <div className="pb-20">
+              {weekGroups.length === 0 ? (
+                <div className="px-4 py-8 text-center text-sm text-slate-500">아직 등록된 내역이 없습니다.</div>
               ) : (
-                group.dateGroups.map((dateGroup) => (
-                  <div key={dateGroup.dateKey}>
-                    <div className="border-b border-slate-100 px-4 py-2">
-                      <Link
-                        to={buildLedgerDateLink(
-                          dateGroup.dateKey,
-                          monthToken,
-                          selectedFilter,
-                          displayParam,
-                          showCurrentWeekBudget,
-                          selectedCategoryIds,
-                        )}
-                        className="text-[0.78rem] font-medium text-slate-700"
-                      >
-                        {dateGroup.dateLabel}
-                      </Link>
-                    </div>
-
-                    {dateGroup.entries.map((entry, index) => {
-                      const categoryText = entry.categoryName ?? "미분류";
-                      const memoText = entry.memo?.trim() || "";
-                      const paymentDetail = [entry.paymentSourceName?.trim(), entry.paymentMethodLabel].filter(Boolean).join("-");
-                      const tagDetail = entry.tagNames.length > 0 ? entry.tagNames.join(", ") : "";
-                      const detailText = [paymentDetail, tagDetail].filter(Boolean).join(" · ");
-
-                      return (
-                        <Link
-                          key={entry.id}
-                          to={`/ledger/entries/${entry.id}/edit?month=${monthToken}${selectedFilter !== "ALL" ? `&type=${selectedFilter}` : ""}${
-                            buildBudgetQuery(displayParam, showCurrentWeekBudget, selectedCategoryIds)
-                              ? `&${buildBudgetQuery(displayParam, showCurrentWeekBudget, selectedCategoryIds)}`
-                              : ""
-                          }`}
+                weekGroups.map((group) => (
+                  <section key={group.id} className={cn("border-b bg-white", group.isCurrentWeek ? "bg-amber-50/50" : "")}>
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-2">
+                      <p className="text-[0.84rem] font-semibold text-slate-800">{group.label}</p>
+                      {group.weekBudget ? (
+                        <p
                           className={cn(
-                            "block px-5 py-4 transition-colors hover:bg-slate-50",
-                            index < dateGroup.entries.length - 1 ? "border-b border-slate-100" : "",
+                            "shrink-0 text-[0.76rem] font-semibold",
+                            budgetFocusType === "EXPENSE"
+                              ? group.weekBudget.value < 0
+                                ? "text-rose-500"
+                                : "text-slate-600"
+                              : budgetFocusType === "INCOME"
+                                ? "text-sky-500"
+                                : "text-emerald-600",
                           )}
                         >
-                          <div className="flex items-start gap-4">
-                            <div className="w-[5rem] shrink-0 text-slate-700">
-                              <p className="truncate text-[0.78rem] font-medium leading-tight text-slate-700">{categoryText}</p>
-                              <p className="mt-1 text-[0.66rem] leading-tight text-slate-400">{formatEntryTimeLine(entry.createdAt)}</p>
-                            </div>
+                          {formatLedgerAmount(group.weekBudget.value)}
+                        </p>
+                      ) : null}
+                    </div>
 
-                            <div className="min-w-0 flex-1 pl-1 pt-1">
-                              {memoText ? (
-                                <p className="truncate text-[0.72rem] font-semibold leading-tight text-slate-700">{memoText}</p>
-                              ) : null}
-                              {detailText ? (
-                                <p className="mt-1 truncate text-[0.64rem] leading-tight text-slate-400">{detailText}</p>
-                              ) : null}
-                            </div>
-
-                            <p className={cn("shrink-0 whitespace-nowrap pt-1 text-right text-[0.8rem] font-medium", getAmountClass(entry.type))}>
-                              {formatLedgerAmount(entry.amount)}
-                            </p>
+                    {group.dateGroups.length === 0 ? (
+                      <div className="px-4 py-5 text-center text-[0.76rem] text-slate-400">이 주에는 내역이 없습니다.</div>
+                    ) : (
+                      group.dateGroups.map((dateGroup) => (
+                        <div key={dateGroup.dateKey}>
+                          <div className="border-b border-slate-100 px-4 py-2">
+                            <Link
+                              to={buildLedgerDateLink(
+                                dateGroup.dateKey,
+                                monthToken,
+                                selectedFilter,
+                                displayParam,
+                                showCurrentWeekBudget,
+                                selectedCategoryIds,
+                              )}
+                              className="text-[0.78rem] font-medium text-slate-700"
+                            >
+                              {dateGroup.dateLabel}
+                            </Link>
                           </div>
-                        </Link>
-                      );
-                    })}
-                  </div>
+
+                          {dateGroup.entries.map((entry, index) => {
+                            const categoryText = entry.categoryName ?? "미분류";
+                            const memoText = entry.memo?.trim() || "";
+                            const paymentDetail = [entry.paymentSourceName?.trim(), entry.paymentMethodLabel].filter(Boolean).join("-");
+                            const tagDetail = entry.tagNames.length > 0 ? entry.tagNames.join(", ") : "";
+                            const detailText = [paymentDetail, tagDetail].filter(Boolean).join(" · ");
+
+                            return (
+                              <Link
+                                key={entry.id}
+                                to={`/ledger/entries/${entry.id}/edit?month=${monthToken}${selectedFilter !== "ALL" ? `&type=${selectedFilter}` : ""}${
+                                  buildBudgetQuery(displayParam, showCurrentWeekBudget, selectedCategoryIds)
+                                    ? `&${buildBudgetQuery(displayParam, showCurrentWeekBudget, selectedCategoryIds)}`
+                                    : ""
+                                }`}
+                                className={cn(
+                                  "block px-5 py-4 transition-colors hover:bg-slate-50",
+                                  index < dateGroup.entries.length - 1 ? "border-b border-slate-100" : "",
+                                )}
+                              >
+                                <div className="flex items-start gap-4">
+                                  <div className="w-[5rem] shrink-0 text-slate-700">
+                                    <p className="truncate text-[0.78rem] font-medium leading-tight text-slate-700">{categoryText}</p>
+                                    <p className="mt-1 text-[0.66rem] leading-tight text-slate-400">{formatEntryTimeLine(entry.createdAt)}</p>
+                                  </div>
+
+                                  <div className="min-w-0 flex-1 pl-1 pt-1">
+                                    {memoText ? (
+                                      <p className="truncate text-[0.72rem] font-semibold leading-tight text-slate-700">{memoText}</p>
+                                    ) : null}
+                                    {detailText ? (
+                                      <p className="mt-1 truncate text-[0.64rem] leading-tight text-slate-400">{detailText}</p>
+                                    ) : null}
+                                  </div>
+
+                                  <p className={cn("shrink-0 whitespace-nowrap pt-1 text-right text-[0.8rem] font-medium", getAmountClass(entry.type))}>
+                                    {formatLedgerAmount(entry.amount)}
+                                  </p>
+                                </div>
+                              </Link>
+                            );
+                          })}
+                        </div>
+                      ))
+                    )}
+                  </section>
                 ))
               )}
-            </section>
-          ))
-        )}
+            </div>
+          </div>
+
+          <div className="w-1/2 shrink-0">
+            <RoutineWeekPanel
+              monthToken={monthToken}
+              weekStartDay={weekStartDay}
+              routineTypes={routineTypes}
+              routineRecords={routineRecords}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );
