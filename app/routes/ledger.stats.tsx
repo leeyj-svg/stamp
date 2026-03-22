@@ -9,6 +9,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
+import { type LedgerPeriodBasis } from "@prisma/client";
+
 import { getSessionWithPermission } from "~/lib/auth.server";
 import { db } from "~/lib/db.server";
 import {
@@ -406,8 +408,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const selectedFilter = parseEntryFilter(url.searchParams.get("type"));
   const monthStart = getMonthStart(monthToken);
   const prevMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() - 1, 1, 0, 0, 0, 0);
-  const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0, 12, 0, 0, 0);
-  const nextMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1, 0, 0, 0, 0);
   const entrySelect = {
     type: true,
     amount: true,
@@ -447,33 +447,45 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     tagNames: entry.tags.map((item) => item.tag.name),
   });
 
-  const [entries, prevEntries, startBudgetResult, endBudgetResult] = await Promise.all([
-    db.ledgerEntry.findMany({
-      where: {
-        userId: user.id,
-        excludeFromStats: false,
-        usedAt: {
-          gte: new Date(monthStart.getFullYear(), monthStart.getMonth(), 1, 0, 0, 0, 0),
-          lt: nextMonthStart,
-        },
-      },
-      select: entrySelect,
-      orderBy: [{ usedAt: "asc" }, { id: "asc" }],
-    }),
-    db.ledgerEntry.findMany({
-      where: {
-        userId: user.id,
-        excludeFromStats: false,
-        usedAt: {
-          gte: prevMonthStart,
-          lt: new Date(monthStart.getFullYear(), monthStart.getMonth(), 1, 0, 0, 0, 0),
-        },
-      },
-      select: entrySelect,
-      orderBy: [{ usedAt: "asc" }, { id: "asc" }],
-    }),
+  const [currentBudgetResult, previousBudgetResult] = await Promise.all([
     ensureLedgerBudgetPeriodForDate(db, user.id, monthStart),
-    ensureLedgerBudgetPeriodForDate(db, user.id, monthEnd),
+    (async () => {
+      const referenceDate = new Date(monthStart);
+      referenceDate.setDate(referenceDate.getDate() - 1);
+      return ensureLedgerBudgetPeriodForDate(db, user.id, referenceDate);
+    })(),
+  ]);
+
+  const currentPeriodStart = new Date(currentBudgetResult.period.periodStartAt);
+  const currentPeriodEnd = new Date(currentBudgetResult.period.periodEndAt);
+  const previousPeriodStart = new Date(previousBudgetResult.period.periodStartAt);
+  const previousPeriodEnd = new Date(previousBudgetResult.period.periodEndAt);
+
+  const [entries, prevEntries] = await Promise.all([
+    db.ledgerEntry.findMany({
+      where: {
+        userId: user.id,
+        excludeFromStats: false,
+        usedAt: {
+          gte: currentPeriodStart,
+          lt: currentPeriodEnd,
+        },
+      },
+      select: entrySelect,
+      orderBy: [{ usedAt: "asc" }, { id: "asc" }],
+    }),
+    db.ledgerEntry.findMany({
+      where: {
+        userId: user.id,
+        excludeFromStats: false,
+        usedAt: {
+          gte: previousPeriodStart,
+          lt: previousPeriodEnd,
+        },
+      },
+      select: entrySelect,
+      orderBy: [{ usedAt: "asc" }, { id: "asc" }],
+    }),
   ]);
 
   const today = new Date();
@@ -484,7 +496,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const budgetPeriods = Array.from(
     new Map(
-      [startBudgetResult.period, endBudgetResult.period].map((period) => [
+      [currentBudgetResult.period].map((period) => [
         period.id,
         {
           id: period.id,
@@ -508,6 +520,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     monthToken,
     monthLabel: getMonthLabel(monthStart),
+    periodBasis: currentBudgetResult.settings.defaultPeriodBasis as LedgerPeriodBasis,
+    periodLabel: currentBudgetResult.period.label ?? getMonthLabel(monthStart),
+    previousPeriodLabel: previousBudgetResult.period.label ?? getMonthLabel(prevMonthStart),
+    currentPeriodStartAt: currentBudgetResult.period.periodStartAt.toISOString(),
+    currentPeriodEndAt: currentBudgetResult.period.periodEndAt.toISOString(),
     prevMonthToken: shiftMonthToken(monthToken, -1),
     nextMonthToken: shiftMonthToken(monthToken, 1),
     todayMonthToken,
@@ -526,8 +543,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         }
       : null,
     selectedFilter,
-    weekStartDay: startBudgetResult.settings.weekStartDay,
-    primaryBudgetPeriodId: startBudgetResult.period.id,
+    weekStartDay: currentBudgetResult.settings.weekStartDay,
+    primaryBudgetPeriodId: currentBudgetResult.period.id,
     budgetPeriods,
     entries: entries.map(mapEntry),
     prevEntries: prevEntries.map(mapEntry),
@@ -538,6 +555,11 @@ export default function LedgerStatsPage() {
   const {
     monthToken,
     monthLabel,
+    periodBasis,
+    periodLabel,
+    previousPeriodLabel,
+    currentPeriodStartAt,
+    currentPeriodEndAt,
     prevMonthToken,
     nextMonthToken,
     todayMonthToken,
@@ -553,12 +575,10 @@ export default function LedgerStatsPage() {
   } =
     useLoaderData<typeof loader>();
 
-  const monthStart = useMemo(() => getMonthStart(monthToken), [monthToken]);
-  const nextMonthStart = useMemo(
-    () => new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1, 0, 0, 0, 0),
-    [monthStart],
-  );
-  const prevMonthLabel = useMemo(() => getMonthLabel(getMonthStart(prevMonthToken)), [prevMonthToken]);
+  const periodStart = useMemo(() => new Date(currentPeriodStartAt), [currentPeriodStartAt]);
+  const periodEnd = useMemo(() => new Date(currentPeriodEndAt), [currentPeriodEndAt]);
+  const statsRangeLabel = periodBasis === "PAYDAY" ? periodLabel : monthLabel;
+  const prevStatsRangeLabel = periodBasis === "PAYDAY" ? previousPeriodLabel : getMonthLabel(getMonthStart(prevMonthToken));
   const todayStart = useMemo(() => new Date(`${todayDateToken}T00:00:00`), [todayDateToken]);
   const nextDayStart = useMemo(() => new Date(`${todayDateToken}T23:59:59.999`), [todayDateToken]);
 
@@ -664,32 +684,6 @@ export default function LedgerStatsPage() {
       SAVING: planBudgetTargets.SAVING,
     };
   }, [planBudgetTargets, primaryBudgetPeriod]);
-
-  const proratedBudgetTargets = useMemo(() => {
-    const totals = createEmptyBudgetTotals();
-
-    for (const period of budgetPeriods) {
-      const periodStartAt = new Date(period.periodStartAt);
-      const periodEndAt = new Date(period.periodEndAt);
-      const overlapDays = getOverlapDayCount(monthStart, nextMonthStart, periodStartAt, periodEndAt);
-      if (overlapDays <= 0) {
-        continue;
-      }
-
-      const periodDayCount = getBudgetPeriodDayCount(period);
-      const overlapRatio = overlapDays / Math.max(periodDayCount, 1);
-
-      for (const plan of period.plans) {
-        totals[plan.type] += plan.totalAmount * overlapRatio;
-      }
-    }
-
-    return {
-      INCOME: Math.round(totals.INCOME),
-      EXPENSE: Math.round(totals.EXPENSE),
-      SAVING: Math.round(totals.SAVING),
-    };
-  }, [budgetPeriods, monthStart, nextMonthStart]);
 
   const budgetCards = useMemo(() => {
     const allTypes: LedgerEntryTypeValue[] = ["INCOME", "EXPENSE", "SAVING"];
@@ -1003,7 +997,7 @@ export default function LedgerStatsPage() {
     for (const period of budgetPeriods) {
       const periodStartAt = new Date(period.periodStartAt);
       const periodEndAt = new Date(period.periodEndAt);
-      const overlapDays = getOverlapDayCount(monthStart, nextMonthStart, periodStartAt, periodEndAt);
+      const overlapDays = getOverlapDayCount(periodStart, periodEnd, periodStartAt, periodEndAt);
       if (overlapDays <= 0) {
         continue;
       }
@@ -1094,7 +1088,7 @@ export default function LedgerStatsPage() {
         fixedSummary,
       };
     });
-  }, [budgetPeriods, entries, monthStart, nextMonthStart, selectedFilter]);
+  }, [budgetPeriods, entries, periodEnd, periodStart, selectedFilter]);
   const activeCategoryBudgetSection = useMemo(() => {
     if (selectedFilter !== "ALL") {
       return categoryBudgetSections[0] ?? null;
@@ -1103,7 +1097,7 @@ export default function LedgerStatsPage() {
     return categoryBudgetSections.find((section) => section.type === categoryTab) ?? categoryBudgetSections[0] ?? null;
   }, [categoryBudgetSections, categoryTab, selectedFilter]);
   const weeklyStats = useMemo(() => {
-    const ranges = getMonthWeekRanges(monthStart, nextMonthStart, weekStartDay);
+    const ranges = getMonthWeekRanges(periodStart, periodEnd, weekStartDay);
 
     return ranges
       .map((range) => {
@@ -1141,7 +1135,7 @@ export default function LedgerStatsPage() {
         };
       })
       .filter((item) => item.income > 0 || item.expense > 0 || item.saving > 0);
-  }, [filteredEntries, monthStart, nextMonthStart, selectedFilter, weekStartDay]);
+  }, [filteredEntries, periodEnd, periodStart, selectedFilter, weekStartDay]);
   const maxWeeklySelectedAmount = useMemo(
     () => weeklyStats.reduce((max, item) => Math.max(max, item.selectedAmount), 0),
     [weeklyStats],
@@ -1170,8 +1164,7 @@ export default function LedgerStatsPage() {
     [budgetCards, weeklyGoalFocusType],
   );
   const weeklyGoalStats = useMemo(() => {
-    const rangeStart = new Date(monthStart.getFullYear(), monthStart.getMonth(), 1, 0, 0, 0, 0);
-    const ranges = getMonthWeekRanges(rangeStart, nextMonthStart, weekStartDay);
+    const ranges = getMonthWeekRanges(periodStart, periodEnd, weekStartDay);
     const meta = getTypeStatMeta(weeklyGoalFocusType);
 
     return ranges.map((range) => {
@@ -1243,7 +1236,7 @@ export default function LedgerStatsPage() {
           .sort((left, right) => right.target - left.target || right.actual - left.actual),
       };
     });
-  }, [budgetPeriods, categoryTab, entries, monthStart, nextMonthStart, selectedFilter, weekStartDay, weeklyGoalFocusType]);
+  }, [budgetPeriods, categoryTab, entries, periodEnd, periodStart, selectedFilter, weekStartDay, weeklyGoalFocusType]);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -1264,6 +1257,7 @@ export default function LedgerStatsPage() {
             <div className="min-w-[9rem] text-center">
               <h1 className="text-[0.96rem] font-semibold text-slate-900">통계</h1>
               <p className="text-[0.82rem] text-slate-500">{monthLabel}</p>
+              {periodBasis === "PAYDAY" ? <p className="text-[0.68rem] text-slate-400">{periodLabel}</p> : null}
             </div>
             <Button asChild variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-700">
               <Link to={buildLedgerStatsLink(nextMonthToken, selectedFilter)}>
@@ -1430,8 +1424,8 @@ export default function LedgerStatsPage() {
               </StatSection>
             ) : null}
 
-            <StatSection title="전월 대비 증감" description={`${prevMonthLabel}과 비교했어요.`}>
-              <ComparisonGraphList items={comparisonGraphItems} previousLabel={prevMonthLabel} currentLabel={monthLabel} />
+            <StatSection title="전월 대비 증감" description={`${prevStatsRangeLabel}과 비교했어요.`}>
+              <ComparisonGraphList items={comparisonGraphItems} previousLabel={prevStatsRangeLabel} currentLabel={statsRangeLabel} />
             </StatSection>
           </>
         ) : null}
