@@ -31,6 +31,7 @@ import { db } from "~/lib/db.server";
 import { commitSession, getFlashSession } from "~/lib/session.server";
 import { formatLedgerAmount, getDateKey, type LedgerEntryTypeValue } from "~/lib/ledger-entry";
 import { ensureLedgerSetup, getMonthToken, shiftMonthToken } from "~/lib/ledger";
+import { loadRoutineCalendarRecords } from "~/lib/routine.server";
 import { cn } from "~/lib/utils";
 
 type EntryFilterValue = "ALL" | LedgerEntryTypeValue;
@@ -404,6 +405,18 @@ function getBudgetDisplayTextClass(type: LedgerEntryTypeValue, value: number, ta
   return emphasis ? "text-slate-500" : "text-slate-300";
 }
 
+function getRoutineMarkerClass(status: "SUCCESS" | "FAIL" | "SKIPPED", isOutsideMonth: boolean) {
+  if (status === "SUCCESS") {
+    return isOutsideMonth ? "opacity-55" : "opacity-100";
+  }
+
+  if (status === "FAIL") {
+    return isOutsideMonth ? "opacity-30" : "opacity-45";
+  }
+
+  return isOutsideMonth ? "opacity-20" : "opacity-30";
+}
+
 async function redirectWithLedgerToast(
   request: Request,
   type: "success" | "error",
@@ -496,11 +509,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0, 12, 0, 0, 0);
   const nextMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1, 0, 0, 0, 0);
 
-  const [firstBudgetPeriodResult, lastBudgetPeriodResult, currentWeekBudget, categories] = await Promise.all([
+  const routineRangeStart = new Date(monthStart.getFullYear(), monthStart.getMonth(), 1 - 7, 0, 0, 0, 0);
+  const routineRangeEnd = new Date(nextMonthStart.getFullYear(), nextMonthStart.getMonth(), 1 + 7, 0, 0, 0, 0);
+
+  const [firstBudgetPeriodResult, lastBudgetPeriodResult, currentWeekBudget, categories, routineRecords] = await Promise.all([
     ensureLedgerBudgetPeriodForDate(db, user.id, monthStart),
     ensureLedgerBudgetPeriodForDate(db, user.id, monthEnd),
     monthToken === todayMonthToken ? getCurrentLedgerWeekBudgetSummary(db, user.id, budgetFocusType, today) : Promise.resolve(null),
     loadLedgerCategories(db, user.id),
+    loadRoutineCalendarRecords(db, user.id, routineRangeStart, routineRangeEnd),
   ]);
 
   const budgetPeriodsById = new Map<number, BudgetPeriodSummary>();
@@ -509,11 +526,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         id: period.id,
         periodStartAt: period.periodStartAt.toISOString(),
         periodEndAt: period.periodEndAt.toISOString(),
-        plans: period.plans.map((plan) => ({
+        plans: period.plans.map((plan: any) => ({
           type: plan.type,
           totalAmount: Number(plan.totalAmount),
           weekCarryMode: plan.weekCarryMode,
-          weeks: plan.weeks.map((week) => ({
+          weeks: plan.weeks.map((week: any) => ({
             weekIndex: week.weekIndex,
             weekStartAt: week.weekStartAt.toISOString(),
             weekEndAt: week.weekEndAt.toISOString(),
@@ -521,7 +538,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             carryInAmount: Number(week.carryInAmount),
             carryOutAmount: Number(week.carryOutAmount),
           })),
-          allocations: plan.allocations.map((allocation) => ({
+          allocations: plan.allocations.map((allocation: any) => ({
             categoryId: allocation.categoryId,
             plannedAmount: Number(allocation.plannedAmount),
             isFixed: allocation.isFixed,
@@ -583,7 +600,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     settings: {
       weekStartDay: firstBudgetPeriodResult.settings.weekStartDay,
     },
-    categories: categories.map((category) => ({
+    categories: categories.map((category: any) => ({
       id: category.id,
       type: category.type,
       name: category.name,
@@ -595,6 +612,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       usedAt: entry.usedAt.toISOString(),
       excludeFromStats: entry.excludeFromStats,
       categoryId: entry.categoryId,
+    })),
+    routineRecords: routineRecords.map((record: any) => ({
+      id: record.id,
+      typeId: record.typeId,
+      status: record.status,
+      recordDate: record.recordDate.toISOString(),
+      createdAt: record.createdAt.toISOString(),
+      type: {
+        id: record.type.id,
+        color: record.type.color,
+        sortOrder: record.type.sortOrder,
+      },
     })),
   };
 };
@@ -614,6 +643,7 @@ export default function LedgerPage() {
     categories,
     budgetPeriods,
     entries,
+    routineRecords,
   } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const currentYear = Number(monthToken.slice(0, 4));
@@ -727,10 +757,52 @@ export default function LedgerPage() {
         .map((entry) => entry.categoryId as number),
     );
 
-    return categories.filter(
-      (category) => category.type === selectedFilter && (monthCategoryIds.has(category.id) || selectedCategoryIds.includes(category.id)),
-    );
+      return categories.filter(
+        (category: any) => category.type === selectedFilter && (monthCategoryIds.has(category.id) || selectedCategoryIds.includes(category.id)),
+      );
   }, [categories, monthEntries, selectedCategoryIds, selectedFilter]);
+  const routineMarkersByDate = useMemo(() => {
+    const grouped = new Map<
+      string,
+      Map<
+        number,
+        {
+          color: string | null;
+          sortOrder: number;
+          status: "SUCCESS" | "FAIL" | "SKIPPED";
+          createdAt: string;
+        }
+      >
+    >();
+
+    for (const record of routineRecords) {
+      if (record.status !== "SUCCESS") {
+        continue;
+      }
+
+      const dateKey = getDateKey(new Date(record.recordDate));
+      const dateGroup = grouped.get(dateKey) ?? new Map();
+      const existing = dateGroup.get(record.typeId);
+
+      if (!existing || new Date(record.createdAt) > new Date(existing.createdAt)) {
+        dateGroup.set(record.typeId, {
+          color: record.type.color,
+          sortOrder: record.type.sortOrder,
+          status: record.status,
+          createdAt: record.createdAt,
+        });
+      }
+
+      grouped.set(dateKey, dateGroup);
+    }
+
+    return new Map(
+      Array.from(grouped.entries()).map(([dateKey, dateGroup]) => [
+        dateKey,
+        Array.from(dateGroup.values()).sort((left, right) => left.sortOrder - right.sortOrder),
+      ]),
+    );
+  }, [routineRecords]);
   const canCollapseCategoryFilters = visibleCategories.length > 6;
   const shouldShowCategoryFilters = !canCollapseCategoryFilters || isCategoryFiltersExpanded || selectedCategoryIds.length > 0;
   const weeklyBudgetStateByDate = useMemo(() => {
@@ -1394,7 +1466,7 @@ export default function LedgerPage() {
                         <div className="flex flex-wrap items-center gap-1">
                           {currentWeekInlineSegments.map((segment) => (
                             <span key={segment.key} className="text-[10px] font-medium text-slate-500">
-                              {segment.label} {getCurrentWeekBudgetInlineLabel(budgetFocusType, segment.amount)}
+                              {getCurrentWeekBudgetInlineLabel(budgetFocusType, segment.amount)}
                             </span>
                           ))}
                         </div>
@@ -1436,7 +1508,7 @@ export default function LedgerPage() {
                   {shouldShowCategoryFilters ? (
                     <div className="overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                       <div className="inline-flex gap-1.5">
-                        {visibleCategories.map((category) => (
+                        {visibleCategories.map((category: any) => (
                           <button
                             key={category.id}
                             type="button"
@@ -1487,6 +1559,7 @@ export default function LedgerPage() {
               const daySummary = dailySummaryByDate.get(getDateKey(day.date)) ?? { income: 0, expense: 0, saving: 0 };
               const dayBudget = budgetRemainingByDate.get(getDateKey(day.date)) ?? { day: null, week: null, month: null };
               const isBudgetStartDate = budgetStartDateTokens.has(getDateKey(day.date));
+              const routineMarkers = routineMarkersByDate.get(getDateKey(day.date)) ?? [];
               const dayOfWeek = day.date.getDay();
               const isOutsideMonth = modifiers.outside;
               const isToday = getDateKey(day.date) === todayDateToken;
@@ -1502,10 +1575,10 @@ export default function LedgerPage() {
                         ? "text-sky-300"
                         : "text-slate-300"
                   : dayOfWeek === 0
-                    ? "text-rose-400"
+                    ? "text-rose-300"
                     : dayOfWeek === 6
-                      ? "text-sky-500"
-                      : "text-slate-800";
+                      ? "text-sky-400"
+                      : "text-slate-500";
 
               return (
                 <CalendarDayButton
@@ -1521,16 +1594,37 @@ export default function LedgerPage() {
                     isToday && "bg-slate-100",
                   )}
                   {...props}
-                >
-                  <span
-                    className={cn(
-                      "inline-flex min-w-[1.8rem] items-center justify-center rounded-sm px-1 py-0.5 text-[1.05rem] font-medium leading-none",
-                      dateColorClass,
-                      isToday && "bg-slate-500 shadow-sm",
-                    )}
                   >
-                    {day.date.getDate()}
-                  </span>
+                    <div className="relative inline-flex items-start">
+                      <span
+                        className={cn(
+                          "inline-flex min-w-[1.15rem] items-center justify-center px-0 py-0 text-[0.78rem] font-normal leading-none",
+                          dateColorClass,
+                          isToday && "bg-slate-500 shadow-sm",
+                        )}
+                      >
+                        {day.date.getDate()}
+                      </span>
+                      {routineMarkers.length > 0 ? (
+                        <div className="pointer-events-none absolute left-full top-0.5 ml-0.5 flex min-w-0 items-center gap-0.5">
+                          {routineMarkers.slice(0, 2).map((marker, index) => (
+                            <span
+                              key={`${marker.sortOrder}-${index}`}
+                              className={cn(
+                                "h-1.5 w-1.5 rounded-full",
+                                getRoutineMarkerClass(marker.status, isOutsideMonth),
+                              )}
+                              style={{ backgroundColor: marker.color ?? "#94a3b8" }}
+                            />
+                          ))}
+                          {routineMarkers.length > 2 ? (
+                            <span className={cn("text-[8px] font-medium text-slate-400", isOutsideMonth && "opacity-60")}>
+                              +{routineMarkers.length - 2}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
                   <div className="flex w-full flex-col items-end gap-0.5 text-right">
                     <span className={cn("min-h-[0.72rem] truncate text-[0.58rem] font-medium leading-none", isOutsideMonth ? "text-sky-300" : "text-sky-500")}>
                       {getDailyAmountText(daySummary.income)}
