@@ -358,6 +358,20 @@ function getCurrentWeekBudgetInlineLabel(type: LedgerEntryTypeValue, amount: num
   return `달성 ${formatLedgerAmount(amount)}`;
 }
 
+function formatCompactBudgetRangeLabel(start: Date, endExclusive: Date) {
+  const endInclusive = addLedgerDays(endExclusive, -1);
+  const startMonth = start.getMonth() + 1;
+  const endMonth = endInclusive.getMonth() + 1;
+  const startDay = start.getDate();
+  const endDay = endInclusive.getDate();
+
+  if (startMonth === endMonth) {
+    return `${startMonth}/${startDay}-${endDay}`;
+  }
+
+  return `${startMonth}/${startDay}-${endMonth}/${endDay}`;
+}
+
 function getBudgetDisplayAmount(type: LedgerEntryTypeValue, budgetAmount: number, actualAmount: number) {
   if (type === "EXPENSE") {
     return budgetAmount - actualAmount;
@@ -969,26 +983,64 @@ export default function LedgerPage() {
     visibleCalendarEnd,
     visibleCalendarStart,
   ]);
-  const currentWeekInlineAmount = useMemo(() => {
+  const currentWeekInlineSegments = useMemo(() => {
     if (!currentWeekRange) {
-      return currentWeekBudget?.displayAmount ?? null;
+      if (!currentWeekBudget) {
+        return [];
+      }
+
+      return [
+        {
+          key: "current",
+          label: currentWeekBudget.weekLabel,
+          amount: currentWeekBudget.displayAmount,
+        },
+      ];
     }
 
-    let accumulatedValue = 0;
-    let hasVisibleBudget = false;
+    const segments: Array<{
+      key: string;
+      label: string;
+      amount: number;
+      start: Date;
+      end: Date;
+    }> = [];
 
     for (let cursor = new Date(currentWeekRange.start); cursor < currentWeekRange.end; cursor = addLedgerDays(cursor, 1)) {
+      const matchingPeriod = budgetPeriods.find((period) => {
+        const periodStartAt = new Date(period.periodStartAt);
+        const periodEndAt = new Date(period.periodEndAt);
+        return cursor >= periodStartAt && cursor < periodEndAt;
+      });
       const dayBudget = budgetRemainingByDate.get(getDateKey(cursor))?.day;
-      if (!dayBudget) {
+
+      if (!matchingPeriod || !dayBudget) {
         continue;
       }
 
-      accumulatedValue += dayBudget.value;
-      hasVisibleBudget = true;
+      const lastSegment = segments[segments.length - 1];
+      if (lastSegment && lastSegment.key === String(matchingPeriod.id)) {
+        lastSegment.amount += dayBudget.value;
+        lastSegment.end = addLedgerDays(cursor, 1);
+        lastSegment.label = formatCompactBudgetRangeLabel(lastSegment.start, lastSegment.end);
+        continue;
+      }
+
+      segments.push({
+        key: String(matchingPeriod.id),
+        label: formatCompactBudgetRangeLabel(cursor, addLedgerDays(cursor, 1)),
+        amount: dayBudget.value,
+        start: new Date(cursor),
+        end: addLedgerDays(cursor, 1),
+      });
     }
 
-    return hasVisibleBudget ? accumulatedValue : (currentWeekBudget?.displayAmount ?? null);
-  }, [budgetRemainingByDate, currentWeekBudget, currentWeekRange]);
+    return segments.map(({ key, label, amount }) => ({
+      key,
+      label,
+      amount,
+    }));
+  }, [budgetPeriods, budgetRemainingByDate, currentWeekBudget, currentWeekRange]);
 
   const toggleBudgetDisplay = (option: BudgetDisplayOption) => {
     navigate(
@@ -1338,13 +1390,14 @@ export default function LedgerPage() {
                       >
                         이번주 예산 보기
                       </button>
-                      {showCurrentWeekBudget && currentWeekBudget ? (
-                        <span className="text-[10px] font-medium text-slate-500">
-                          {getCurrentWeekBudgetInlineLabel(
-                            budgetFocusType,
-                            currentWeekInlineAmount ?? currentWeekBudget.displayAmount,
-                          )}
-                        </span>
+                      {showCurrentWeekBudget && currentWeekInlineSegments.length > 0 ? (
+                        <div className="flex flex-wrap items-center gap-1">
+                          {currentWeekInlineSegments.map((segment) => (
+                            <span key={segment.key} className="text-[10px] font-medium text-slate-500">
+                              {segment.label} {getCurrentWeekBudgetInlineLabel(budgetFocusType, segment.amount)}
+                            </span>
+                          ))}
+                        </div>
                       ) : null}
                     </div>
                   ) : null}
