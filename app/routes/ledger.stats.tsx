@@ -9,6 +9,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
+import { type LedgerPeriodBasis } from "@prisma/client";
+
 import { getSessionWithPermission } from "~/lib/auth.server";
 import { db } from "~/lib/db.server";
 import {
@@ -347,6 +349,36 @@ function getTypeStatMeta(type: LedgerEntryTypeValue) {
   };
 }
 
+function formatSignedPercent(value: number) {
+  return `${value > 0 ? "+" : ""}${value}%`;
+}
+
+function getComparisonDeltaMeta(type: LedgerEntryTypeValue | "NET", delta: number, current: number, previous: number) {
+  const displayDelta = type === "EXPENSE" ? -delta : delta;
+  const rawPercent = previous > 0 ? Math.round((delta / previous) * 100) : current > 0 ? 100 : 0;
+  const displayPercent = type === "EXPENSE" ? -rawPercent : rawPercent;
+
+  let deltaLabel = "0%";
+  if (previous > 0) {
+    deltaLabel = formatSignedPercent(displayPercent);
+  } else if (current > 0) {
+    deltaLabel = "신규";
+  }
+
+  let deltaClassName = "text-slate-500";
+  if (displayDelta > 0) {
+    deltaClassName = type === "SAVING" ? "text-emerald-600" : "text-sky-500";
+  } else if (displayDelta < 0) {
+    deltaClassName = "text-rose-500";
+  }
+
+  return {
+    displayDelta,
+    deltaLabel,
+    deltaClassName,
+  };
+}
+
 function getDonutPalette(tone: DonutTone) {
   if (tone === "payment") {
     return ["#fb7185", "#f97316", "#f59e0b", "#ef4444", "#f43f5e", "#fda4af"];
@@ -406,8 +438,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const selectedFilter = parseEntryFilter(url.searchParams.get("type"));
   const monthStart = getMonthStart(monthToken);
   const prevMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() - 1, 1, 0, 0, 0, 0);
-  const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0, 12, 0, 0, 0);
-  const nextMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1, 0, 0, 0, 0);
   const entrySelect = {
     type: true,
     amount: true,
@@ -447,14 +477,24 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     tagNames: entry.tags.map((item) => item.tag.name),
   });
 
-  const [entries, prevEntries, startBudgetResult, endBudgetResult] = await Promise.all([
+  const currentBudgetResult = await ensureLedgerBudgetPeriodForDate(db, user.id, monthStart);
+  const currentPeriodStart = new Date(currentBudgetResult.period.periodStartAt);
+  const currentPeriodEnd = new Date(currentBudgetResult.period.periodEndAt);
+  const previousPeriodReference = new Date(currentPeriodStart);
+  previousPeriodReference.setDate(previousPeriodReference.getDate() - 1);
+  const previousBudgetResult = await ensureLedgerBudgetPeriodForDate(db, user.id, previousPeriodReference);
+
+  const previousPeriodStart = new Date(previousBudgetResult.period.periodStartAt);
+  const previousPeriodEnd = new Date(previousBudgetResult.period.periodEndAt);
+
+  const [entries, prevEntries] = await Promise.all([
     db.ledgerEntry.findMany({
       where: {
         userId: user.id,
         excludeFromStats: false,
         usedAt: {
-          gte: new Date(monthStart.getFullYear(), monthStart.getMonth(), 1, 0, 0, 0, 0),
-          lt: nextMonthStart,
+          gte: currentPeriodStart,
+          lt: currentPeriodEnd,
         },
       },
       select: entrySelect,
@@ -465,15 +505,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         userId: user.id,
         excludeFromStats: false,
         usedAt: {
-          gte: prevMonthStart,
-          lt: new Date(monthStart.getFullYear(), monthStart.getMonth(), 1, 0, 0, 0, 0),
+          gte: previousPeriodStart,
+          lt: previousPeriodEnd,
         },
       },
       select: entrySelect,
       orderBy: [{ usedAt: "asc" }, { id: "asc" }],
     }),
-    ensureLedgerBudgetPeriodForDate(db, user.id, monthStart),
-    ensureLedgerBudgetPeriodForDate(db, user.id, monthEnd),
   ]);
 
   const today = new Date();
@@ -484,7 +522,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const budgetPeriods = Array.from(
     new Map(
-      [startBudgetResult.period, endBudgetResult.period].map((period) => [
+      [currentBudgetResult.period].map((period) => [
         period.id,
         {
           id: period.id,
@@ -508,6 +546,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     monthToken,
     monthLabel: getMonthLabel(monthStart),
+    periodBasis: currentBudgetResult.settings.defaultPeriodBasis as LedgerPeriodBasis,
+    periodLabel: currentBudgetResult.period.label ?? getMonthLabel(monthStart),
+    previousPeriodLabel: previousBudgetResult.period.label ?? getMonthLabel(prevMonthStart),
+    currentPeriodStartAt: currentBudgetResult.period.periodStartAt.toISOString(),
+    currentPeriodEndAt: currentBudgetResult.period.periodEndAt.toISOString(),
     prevMonthToken: shiftMonthToken(monthToken, -1),
     nextMonthToken: shiftMonthToken(monthToken, 1),
     todayMonthToken,
@@ -526,8 +569,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         }
       : null,
     selectedFilter,
-    weekStartDay: startBudgetResult.settings.weekStartDay,
-    primaryBudgetPeriodId: startBudgetResult.period.id,
+    weekStartDay: currentBudgetResult.settings.weekStartDay,
+    primaryBudgetPeriodId: currentBudgetResult.period.id,
     budgetPeriods,
     entries: entries.map(mapEntry),
     prevEntries: prevEntries.map(mapEntry),
@@ -538,6 +581,11 @@ export default function LedgerStatsPage() {
   const {
     monthToken,
     monthLabel,
+    periodBasis,
+    periodLabel,
+    previousPeriodLabel,
+    currentPeriodStartAt,
+    currentPeriodEndAt,
     prevMonthToken,
     nextMonthToken,
     todayMonthToken,
@@ -553,12 +601,10 @@ export default function LedgerStatsPage() {
   } =
     useLoaderData<typeof loader>();
 
-  const monthStart = useMemo(() => getMonthStart(monthToken), [monthToken]);
-  const nextMonthStart = useMemo(
-    () => new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1, 0, 0, 0, 0),
-    [monthStart],
-  );
-  const prevMonthLabel = useMemo(() => getMonthLabel(getMonthStart(prevMonthToken)), [prevMonthToken]);
+  const periodStart = useMemo(() => new Date(currentPeriodStartAt), [currentPeriodStartAt]);
+  const periodEnd = useMemo(() => new Date(currentPeriodEndAt), [currentPeriodEndAt]);
+  const statsRangeLabel = periodBasis === "PAYDAY" ? periodLabel : monthLabel;
+  const prevStatsRangeLabel = periodBasis === "PAYDAY" ? previousPeriodLabel : getMonthLabel(getMonthStart(prevMonthToken));
   const todayStart = useMemo(() => new Date(`${todayDateToken}T00:00:00`), [todayDateToken]);
   const nextDayStart = useMemo(() => new Date(`${todayDateToken}T23:59:59.999`), [todayDateToken]);
 
@@ -665,32 +711,6 @@ export default function LedgerStatsPage() {
     };
   }, [planBudgetTargets, primaryBudgetPeriod]);
 
-  const proratedBudgetTargets = useMemo(() => {
-    const totals = createEmptyBudgetTotals();
-
-    for (const period of budgetPeriods) {
-      const periodStartAt = new Date(period.periodStartAt);
-      const periodEndAt = new Date(period.periodEndAt);
-      const overlapDays = getOverlapDayCount(monthStart, nextMonthStart, periodStartAt, periodEndAt);
-      if (overlapDays <= 0) {
-        continue;
-      }
-
-      const periodDayCount = getBudgetPeriodDayCount(period);
-      const overlapRatio = overlapDays / Math.max(periodDayCount, 1);
-
-      for (const plan of period.plans) {
-        totals[plan.type] += plan.totalAmount * overlapRatio;
-      }
-    }
-
-    return {
-      INCOME: Math.round(totals.INCOME),
-      EXPENSE: Math.round(totals.EXPENSE),
-      SAVING: Math.round(totals.SAVING),
-    };
-  }, [budgetPeriods, monthStart, nextMonthStart]);
-
   const budgetCards = useMemo(() => {
     const allTypes: LedgerEntryTypeValue[] = ["INCOME", "EXPENSE", "SAVING"];
 
@@ -790,17 +810,17 @@ export default function LedgerStatsPage() {
       const current = summary[key];
       const previous = previousSummary[key];
       const delta = current - previous;
-      const deltaPercent = previous > 0 ? Math.round((delta / previous) * 100) : current > 0 ? 100 : 0;
-      const deltaLabel = previous > 0 ? `${deltaPercent > 0 ? "+" : ""}${deltaPercent}%` : current > 0 ? "신규" : "0%";
       const meta = getBudgetMeta(type);
+      const comparisonMeta = getComparisonDeltaMeta(type, delta, current, previous);
 
       return {
         type,
         label: getTypeLabel(type),
         current,
         previous,
-        delta,
-        deltaLabel,
+        delta: comparisonMeta.displayDelta,
+        deltaLabel: comparisonMeta.deltaLabel,
+        deltaClassName: comparisonMeta.deltaClassName,
         meta,
       };
     });
@@ -812,6 +832,7 @@ export default function LedgerStatsPage() {
       previous: card.previous,
       delta: card.delta,
       deltaLabel: card.deltaLabel,
+      deltaClassName: card.deltaClassName,
       valueClassName: card.meta.colorClass,
       barClassName:
         card.type === "INCOME" ? "bg-sky-500" : card.type === "EXPENSE" ? "bg-rose-400" : "bg-emerald-600",
@@ -819,15 +840,15 @@ export default function LedgerStatsPage() {
 
     if (selectedFilter === "ALL") {
       const netDelta = netResult - previousNetResult;
-      const netDeltaPercent =
-        previousNetResult !== 0 ? Math.round((netDelta / Math.abs(previousNetResult)) * 100) : netResult !== 0 ? 100 : 0;
+      const comparisonMeta = getComparisonDeltaMeta("NET", netDelta, netResult, Math.abs(previousNetResult));
 
       items.push({
         label: "남은 금액",
         current: netResult,
         previous: previousNetResult,
-        delta: netDelta,
-        deltaLabel: previousNetResult !== 0 ? `${netDeltaPercent > 0 ? "+" : ""}${netDeltaPercent}%` : netResult !== 0 ? "신규" : "0%",
+        delta: comparisonMeta.displayDelta,
+        deltaLabel: comparisonMeta.deltaLabel,
+        deltaClassName: comparisonMeta.deltaClassName,
         valueClassName: netResult >= 0 ? "text-sky-500" : "text-rose-500",
         barClassName: netResult >= 0 ? "bg-sky-500" : "bg-rose-400",
       });
@@ -1003,7 +1024,7 @@ export default function LedgerStatsPage() {
     for (const period of budgetPeriods) {
       const periodStartAt = new Date(period.periodStartAt);
       const periodEndAt = new Date(period.periodEndAt);
-      const overlapDays = getOverlapDayCount(monthStart, nextMonthStart, periodStartAt, periodEndAt);
+      const overlapDays = getOverlapDayCount(periodStart, periodEnd, periodStartAt, periodEndAt);
       if (overlapDays <= 0) {
         continue;
       }
@@ -1094,7 +1115,7 @@ export default function LedgerStatsPage() {
         fixedSummary,
       };
     });
-  }, [budgetPeriods, entries, monthStart, nextMonthStart, selectedFilter]);
+  }, [budgetPeriods, entries, periodEnd, periodStart, selectedFilter]);
   const activeCategoryBudgetSection = useMemo(() => {
     if (selectedFilter !== "ALL") {
       return categoryBudgetSections[0] ?? null;
@@ -1103,7 +1124,7 @@ export default function LedgerStatsPage() {
     return categoryBudgetSections.find((section) => section.type === categoryTab) ?? categoryBudgetSections[0] ?? null;
   }, [categoryBudgetSections, categoryTab, selectedFilter]);
   const weeklyStats = useMemo(() => {
-    const ranges = getMonthWeekRanges(monthStart, nextMonthStart, weekStartDay);
+    const ranges = getMonthWeekRanges(periodStart, periodEnd, weekStartDay);
 
     return ranges
       .map((range) => {
@@ -1141,7 +1162,7 @@ export default function LedgerStatsPage() {
         };
       })
       .filter((item) => item.income > 0 || item.expense > 0 || item.saving > 0);
-  }, [filteredEntries, monthStart, nextMonthStart, selectedFilter, weekStartDay]);
+  }, [filteredEntries, periodEnd, periodStart, selectedFilter, weekStartDay]);
   const maxWeeklySelectedAmount = useMemo(
     () => weeklyStats.reduce((max, item) => Math.max(max, item.selectedAmount), 0),
     [weeklyStats],
@@ -1170,8 +1191,7 @@ export default function LedgerStatsPage() {
     [budgetCards, weeklyGoalFocusType],
   );
   const weeklyGoalStats = useMemo(() => {
-    const rangeStart = new Date(monthStart.getFullYear(), monthStart.getMonth(), 1, 0, 0, 0, 0);
-    const ranges = getMonthWeekRanges(rangeStart, nextMonthStart, weekStartDay);
+    const ranges = getMonthWeekRanges(periodStart, periodEnd, weekStartDay);
     const meta = getTypeStatMeta(weeklyGoalFocusType);
 
     return ranges.map((range) => {
@@ -1243,7 +1263,7 @@ export default function LedgerStatsPage() {
           .sort((left, right) => right.target - left.target || right.actual - left.actual),
       };
     });
-  }, [budgetPeriods, categoryTab, entries, monthStart, nextMonthStart, selectedFilter, weekStartDay, weeklyGoalFocusType]);
+  }, [budgetPeriods, categoryTab, entries, periodEnd, periodStart, selectedFilter, weekStartDay, weeklyGoalFocusType]);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -1264,6 +1284,7 @@ export default function LedgerStatsPage() {
             <div className="min-w-[9rem] text-center">
               <h1 className="text-[0.96rem] font-semibold text-slate-900">통계</h1>
               <p className="text-[0.82rem] text-slate-500">{monthLabel}</p>
+              {periodBasis === "PAYDAY" ? <p className="text-[0.68rem] text-slate-400">{periodLabel}</p> : null}
             </div>
             <Button asChild variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-700">
               <Link to={buildLedgerStatsLink(nextMonthToken, selectedFilter)}>
@@ -1430,8 +1451,8 @@ export default function LedgerStatsPage() {
               </StatSection>
             ) : null}
 
-            <StatSection title="전월 대비 증감" description={`${prevMonthLabel}과 비교했어요.`}>
-              <ComparisonGraphList items={comparisonGraphItems} previousLabel={prevMonthLabel} currentLabel={monthLabel} />
+            <StatSection title="전월 대비 증감" description={`${prevStatsRangeLabel}과 비교했어요.`}>
+              <ComparisonGraphList items={comparisonGraphItems} previousLabel={prevStatsRangeLabel} currentLabel={statsRangeLabel} />
             </StatSection>
           </>
         ) : null}
@@ -2179,6 +2200,7 @@ function ComparisonGraphList({
     previous: number;
     delta: number;
     deltaLabel: string;
+    deltaClassName: string;
     valueClassName: string;
     barClassName: string;
   }>;
@@ -2198,7 +2220,7 @@ function ComparisonGraphList({
             <div className="flex items-center justify-between gap-3">
               <p className="text-[0.82rem] font-medium text-slate-800">{item.label}</p>
               <div className="text-right">
-                <p className={cn("text-[0.78rem] font-semibold", item.delta === 0 ? "text-slate-500" : item.valueClassName)}>
+                <p className={cn("text-[0.78rem] font-semibold", item.delta === 0 ? "text-slate-500" : item.deltaClassName)}>
                   {formatSignedLedgerAmount(item.delta)}
                 </p>
                 <p className="text-[0.68rem] text-slate-400">{item.deltaLabel}</p>
