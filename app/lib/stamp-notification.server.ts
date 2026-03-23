@@ -1,18 +1,11 @@
 import { format } from "date-fns";
 
 import { AlimtalkType, sendAlimtalk } from "~/lib/alimtalk.server";
-
-const STAMPS_PER_CARD = 10;
-
-function getStampCouponDescription(referenceDate = new Date()) {
-  return `${referenceDate.getFullYear()}년 스탬프 이벤트 보상`;
-}
-
-function getStampCouponExpiresAt(referenceDate = new Date()) {
-  const expiresAt = new Date(referenceDate);
-  expiresAt.setFullYear(expiresAt.getFullYear() + 1);
-  return expiresAt;
-}
+import {
+  STAMPS_PER_CARD,
+  getStampCouponDescription,
+  getStampCouponExpiresAt,
+} from "~/lib/stamp-coupon.server";
 
 export async function sendCouponIssuedAlimtalk(params: {
   phoneNumber: string;

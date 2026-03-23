@@ -33,6 +33,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "~
 import { getSessionWithPermission } from "~/lib/auth.server";
 import { db } from "~/lib/db.server";
 import { commitSession, getFlashSession } from "~/lib/session.server";
+import { STAMPS_PER_CARD, ensureCouponForCompletedStampCard } from "~/lib/stamp-coupon.server";
+import { sendCouponIssuedAlimtalk } from "~/lib/stamp-notification.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   await getSessionWithPermission(request, "ADMIN");
@@ -179,6 +181,81 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     });
   }
 
+  if (intent === "issueStampCardCoupon") {
+    const stampCardId = Number(formData.get("stampCardId"));
+
+    if (!stampCardId) {
+      flashSession.flash("toast", { type: "error", message: "스탬프 카드가 올바르지 않습니다." });
+      return redirect(`/admin/users/${userId}`, {
+        headers: { "Set-Cookie": await commitSession(flashSession) },
+      });
+    }
+
+    try {
+      const adminTargetUser = await db.user.findUnique({
+        where: { id: userId },
+        select: { name: true, phoneNumber: true },
+      });
+
+      const coupon = await db.$transaction(async (prisma) => {
+        const stampCard = await prisma.stampCard.findUnique({
+          where: { id: stampCardId },
+          select: {
+            id: true,
+            userId: true,
+            coupon: { select: { id: true } },
+            _count: { select: { entries: true } },
+          },
+        });
+
+        if (!stampCard || stampCard.userId !== userId) {
+          throw new Error("스탬프 카드를 찾을 수 없습니다.");
+        }
+
+        if (stampCard.coupon) {
+          throw new Error("이미 쿠폰이 발급된 카드입니다.");
+        }
+
+        if (stampCard._count.entries < STAMPS_PER_CARD) {
+          throw new Error(`스탬프 ${STAMPS_PER_CARD}개를 모두 모아야 쿠폰을 발급할 수 있습니다.`);
+        }
+
+        const issuedCoupon = await ensureCouponForCompletedStampCard(prisma, {
+          stampCardId,
+          userId,
+        });
+
+        if (!issuedCoupon) {
+          throw new Error("쿠폰을 발급할 수 없습니다.");
+        }
+
+        return issuedCoupon;
+      });
+
+      if (adminTargetUser?.name && adminTargetUser.phoneNumber) {
+        await sendCouponIssuedAlimtalk({
+          phoneNumber: adminTargetUser.phoneNumber,
+          customerName: adminTargetUser.name,
+          description: coupon.description,
+          expiresAt: coupon.expiresAt,
+          appUrl: process.env.APP_URL ?? new URL(request.url).origin,
+        });
+        flashSession.flash("toast", { type: "success", message: "쿠폰을 발급하고 알림톡도 보냈습니다." });
+      } else {
+        flashSession.flash("toast", { type: "success", message: "쿠폰을 발급했습니다." });
+      }
+    } catch (error) {
+      flashSession.flash("toast", {
+        type: "error",
+        message: getErrorMessage(error, "쿠폰 발급 중 오류가 발생했습니다."),
+      });
+    }
+
+    return redirect(`/admin/users/${userId}`, {
+      headers: { "Set-Cookie": await commitSession(flashSession) },
+    });
+  }
+
   if (intent === "addStamp") {
     const eventId = formData.get("eventId") as string;
     if (!eventId) {
@@ -210,6 +287,15 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           await prisma.stampEntry.create({
             data: { userId, eventId, stampCardId: activeCard.id },
           });
+
+          const nextStampCount = activeCard._count.entries + 1;
+
+          if (nextStampCount >= STAMPS_PER_CARD) {
+            await ensureCouponForCompletedStampCard(prisma, {
+              stampCardId: activeCard.id,
+              userId,
+            });
+          }
         });
 
         flashSession.flash("toast", { type: "success", message: "스탬프가 성공적으로 적립되었습니다." });
@@ -281,6 +367,15 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
               adminNote,
             },
           });
+
+          const nextStampCount = activeCard._count.entries + 1;
+
+          if (nextStampCount >= STAMPS_PER_CARD) {
+            await ensureCouponForCompletedStampCard(prisma, {
+              stampCardId: activeCard.id,
+              userId,
+            });
+          }
         });
 
         flashSession.flash("toast", { type: "success", message: "관리자 수기 적립이 완료되었습니다." });
@@ -502,10 +597,15 @@ export default function UserDetailPage() {
               user.StampCard.map((card: StampCardItem) => (
                 <div key={card.id} className="flex items-center justify-between gap-2 rounded-md border p-3">
                   <div>
-                    <div className="font-medium">
-                      카드 {card._count.entries} / 10
-                      {card.isRedeemed && <Badge className="ml-2">사용 완료</Badge>}
-                    </div>
+                      <div className="font-medium">
+                        카드 {card._count.entries} / 10
+                        {card.isRedeemed && <Badge className="ml-2">사용 완료</Badge>}
+                        {!card.coupon && card._count.entries >= 10 && (
+                          <Badge variant="outline" className="ml-2">
+                            관리자 발급 대기
+                          </Badge>
+                        )}
+                      </div>
                     <p className="text-xs text-muted-foreground">생성일 {card.createdAtFormatted}</p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -514,6 +614,7 @@ export default function UserDetailPage() {
                         <Ticket className="h-3 w-3" /> 쿠폰 발급됨
                       </Badge>
                     )}
+                    {!card.coupon && card._count.entries >= 10 && <IssueStampCardCouponButton cardId={card.id} />}
                     <DeleteStampCardDialog cardId={card.id} hasCoupon={!!card.coupon} />
                   </div>
                 </div>
@@ -625,6 +726,21 @@ function DeleteStampDialog({ stampEntryId }: { stampEntryId: number }) {
         </fetcher.Form>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+function IssueStampCardCouponButton({ cardId }: { cardId: number }) {
+  const fetcher = useFetcher();
+  const isSubmitting = fetcher.state !== "idle";
+
+  return (
+    <fetcher.Form method="post">
+      <input type="hidden" name="intent" value="issueStampCardCoupon" />
+      <input type="hidden" name="stampCardId" value={cardId} />
+      <Button type="submit" size="sm" variant="outline" disabled={isSubmitting}>
+        {isSubmitting ? "발급 중..." : "쿠폰 발급"}
+      </Button>
+    </fetcher.Form>
   );
 }
 

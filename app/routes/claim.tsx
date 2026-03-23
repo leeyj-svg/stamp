@@ -3,6 +3,7 @@ import { db } from "~/lib/db.server";
 import { getSession as getAuthSession } from "~/lib/auth.server";
 import { getFlashSession, commitSession } from "~/lib/session.server";
 import { sendStampProgressAlimtalk } from "~/lib/stamp-notification.server";
+import { STAMPS_PER_CARD, ensureCouponForCompletedStampCard } from "~/lib/stamp-coupon.server";
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "스탬프 적립 중 알 수 없는 오류가 발생했습니다.";
@@ -98,7 +99,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         include: { _count: { select: { entries: true } } },
       });
 
-      if (!activeStampCard) {
+      if (!activeStampCard || activeStampCard._count.entries >= STAMPS_PER_CARD) {
         activeStampCard = await prisma.stampCard.create({
           data: { userId: user.id },
           include: { _count: { select: { entries: true } } },
@@ -124,6 +125,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         },
       });
 
+      const nextStampCount = activeStampCard._count.entries + 1;
+
+      if (nextStampCount >= STAMPS_PER_CARD) {
+        await ensureCouponForCompletedStampCard(prisma, {
+          stampCardId: activeStampCard.id,
+          userId: user.id,
+        });
+      }
+
       await prisma.claimableStamp.update({
         where: { id: claimableStamp.id },
         data: {
@@ -136,7 +146,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       return {
         eventName: claimableStamp.event.name,
-        currentStampCount: activeStampCard._count.entries + 1,
+        currentStampCount: nextStampCount,
       };
     });
 

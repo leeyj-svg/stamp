@@ -35,6 +35,7 @@ import { lucia, hashPassword } from '~/lib/auth.server';
 import { getFlashSession, commitSession } from '~/lib/session.server';
 import { sendAlimtalk, AlimtalkType } from '~/lib/alimtalk.server';
 import { sendStampProgressAlimtalk } from '~/lib/stamp-notification.server';
+import { STAMPS_PER_CARD, ensureCouponForCompletedStampCard } from '~/lib/stamp-coupon.server';
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
@@ -177,7 +178,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           include: { _count: { select: { entries: true } } },
         });
 
-        if (!activeStampCard) {
+        if (!activeStampCard || activeStampCard._count.entries >= STAMPS_PER_CARD) {
           activeStampCard = await prisma.stampCard.create({
             data: { userId },
             include: { _count: { select: { entries: true } } },
@@ -192,6 +193,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           },
         });
 
+        const nextStampCount = activeStampCard._count.entries + 1;
+
+        if (nextStampCount >= STAMPS_PER_CARD) {
+          await ensureCouponForCompletedStampCard(prisma, {
+            stampCardId: activeStampCard.id,
+            userId,
+          });
+        }
+
         await prisma.claimableStamp.update({
           where: { id: claimableStamp.id },
           data: {
@@ -204,7 +214,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         stampNotification = {
           eventName: claimableStamp.event.name,
-          currentCount: activeStampCard._count.entries + 1,
+          currentCount: nextStampCount,
         };
       }
 

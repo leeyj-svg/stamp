@@ -1,6 +1,6 @@
 // app/routes/card.tsx
 
-import {  Link, type LoaderFunctionArgs, redirect, useRevalidator } from "react-router";
+import {  Link, type LoaderFunctionArgs, redirect } from "react-router";
 import { useLoaderData, useFetcher } from "react-router";
 import { getSession } from "~/lib/auth.server";
 import { db } from "~/lib/db.server";
@@ -12,7 +12,6 @@ import { Badge } from "~/components/ui/badge";
 import { AwardIcon, Calendar, Gift, Star, Users } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { format } from "date-fns/format";
-import { toast } from "sonner";
 import { Toaster } from "~/components/ui/sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 
@@ -62,45 +61,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     orderBy: { createdAt: 'desc' }, // 최신 쿠폰을 먼저 보여주기 위해
   });
 
-  return { stampCards, coupons, userId: user.id };
+  return { stampCards, coupons };
 };
 
 
 // --- Default 컴포넌트 (UI 로직 수정) ---
 export default function MyStampCardPage() {
-  const { stampCards, coupons , userId } = useLoaderData<typeof loader>();
+  const { stampCards, coupons } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
-  const issueCouponFetcher = useFetcher();
   const [viewingEventId, setViewingEventId] = useState<string | null>(null);
   const [viewingAdminNote, setViewingAdminNote] = useState<string | null>(null);
-
-  const revalidator = useRevalidator();
-  const [toastShown, setToastShown] = useState(false); 
 
   useEffect(() => {
     if (viewingEventId) {
       fetcher.load(`/api/events/${viewingEventId}`);
     }
   }, [viewingEventId]);
-
-useEffect(() => {
-    // 1. 새로운 제출이 시작되면(submitting, loading), 토스트 표시 상태를 초기화합니다.
-    if (issueCouponFetcher.state !== 'idle') {
-      setToastShown(false);
-    }
-    
-    // 2. 작업이 완료되고(idle), 데이터가 있으며, 아직 토스트를 표시하지 않았을 때만 실행합니다.
-    if (issueCouponFetcher.state === 'idle' && issueCouponFetcher.data && !toastShown) {
-      if (issueCouponFetcher.data.success) {
-        toast.success(issueCouponFetcher.data.message || "쿠폰이 성공적으로 발급되었습니다!");
-        revalidator.revalidate(); // 데이터 갱신
-      } else if (issueCouponFetcher.data.error) {
-        toast.error(issueCouponFetcher.data.error || "쿠폰 발급 중 오류가 발생했습니다.");
-      }
-      // 3. 토스트를 표시했다고 상태를 업데이트하여, 다음 리렌더링 시에는 다시 표시되지 않도록 합니다.
-      setToastShown(true);
-    }
-  }, [issueCouponFetcher.state, issueCouponFetcher.data, revalidator, toastShown]);
   
   
   const handleStampClick = (data: string | { adminNote: string | null }) => {
@@ -140,13 +116,15 @@ useEffect(() => {
               
               {activeCards.length > 0 ? (
                 <div className="space-y-6">
-                  {activeCards.map((card) => {
-                    const collectedStamps = card.entries.length;
-                    const cardStatusText = `${STAMPS_PER_CARD - collectedStamps}개 더 모으면 쿠폰이 발급됩니다!`;
-                    const isCardFull = collectedStamps >= STAMPS_PER_CARD;
+                    {activeCards.map((card) => {
+                      const collectedStamps = card.entries.length;
+                      const isCardFull = collectedStamps >= STAMPS_PER_CARD;
+                      const cardStatusText = isCardFull
+                        ? "관리자가 쿠폰 발급을 확인 중입니다."
+                        : `${STAMPS_PER_CARD - collectedStamps}개 더 모으면 쿠폰이 발급됩니다!`;
 
-                    return (
-                      <Card key={card.id} className={`p-6 bg-white border-[#81C784] shadow-lg`}>
+                      return (
+                        <Card key={card.id} className={`p-6 bg-white border-[#81C784] shadow-lg`}>
                         <CardHeader className="text-center pb-4">
                           
                           <CardDescription className={`text-lg text-[#81C784]`}>
@@ -163,23 +141,11 @@ useEffect(() => {
                             ))}
                           </div>
 
-                          <div className="mt-8 text-center">
-                                      {isCardFull && !card.isRedeemed && !card.coupon && (
-                              <issueCouponFetcher.Form method="post" action="/api/coupons/issue">
-                                <input type="hidden" name="intent" value="issueCoupon" />
-                                <input type="hidden" name="stampCardId" value={card.id} />
-                                <input type="hidden" name="userId" value={userId} />
-                                <Button 
-                                  type="submit" 
-                                  disabled={issueCouponFetcher.state === 'submitting'} 
-                                  className="w-full text-lg py-6 animate-pulse bg-[#81C784] text-white hover:bg-[#66BB6A]"
-                                >
-                                  <Gift className="h-6 w-6 mr-2" />
-                                  {issueCouponFetcher.state === 'submitting' ? "쿠폰 발급 중..." : "쿠폰 발급받기"}
-                                </Button>
-                              </issueCouponFetcher.Form>
-                            )}
-                          </div>
+                            <div className="mt-8 text-center">
+                              {isCardFull && !card.coupon && (
+                                <p className="text-sm text-[#81C784]">관리자 확인 후 쿠폰이 발급됩니다.</p>
+                              )}
+                            </div>
                      </CardContent>
                       </Card>
                   );

@@ -12,11 +12,10 @@ import { UserStatus } from '@prisma/client';
 import { EventForm } from '~/components/eventform';
 import { assertCategoryAccess, requireAdminAccessScope } from '~/lib/admin-access.server';
 import { db } from '~/lib/db.server';
+import { STAMPS_PER_CARD, ensureCouponForCompletedStampCard } from '~/lib/stamp-coupon.server';
 import { sendStampProgressAlimtalk } from '~/lib/stamp-notification.server';
 import { commitSession, getFlashSession } from '~/lib/session.server';
 import { deleteImages, uploadImages } from '~/lib/upload.server';
-
-const STAMPS_PER_CARD = 10;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const scope = await requireAdminAccessScope(request);
@@ -325,6 +324,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         const stampEntriesToCreate: { userId: string; eventId: string; stampCardId: number }[] = [];
         const newCardsToCreate: { userId: string }[] = [];
+        const completedCardIds = new Set<number>();
 
         for (const userId of userIdsToStamp) {
           const cards = userCardsMap.get(userId) || [];
@@ -333,6 +333,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
           if (incompleteCard) {
             stampEntriesToCreate.push({ userId, eventId, stampCardId: incompleteCard.id });
+            if (currentStampCount + 1 >= STAMPS_PER_CARD) {
+              completedCardIds.add(incompleteCard.id);
+            }
           } else {
             newCardsToCreate.push({ userId });
           }
@@ -359,6 +362,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         if (stampEntriesToCreate.length > 0) {
           await prisma.stampEntry.createMany({ data: stampEntriesToCreate });
+        }
+
+        for (const stampCardId of completedCardIds) {
+          await ensureCouponForCompletedStampCard(prisma, { stampCardId });
         }
       }
     });
