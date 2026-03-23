@@ -1207,34 +1207,6 @@ export default function LedgerPage() {
                 <DropdownMenuItem asChild>
                   <Link to="/mypage">내정보</Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link
-                    to={buildLedgerListLink(
-                      monthToken,
-                      selectedFilter,
-                      selectedDisplayOptions,
-                      showCurrentWeekBudget,
-                      selectedCategoryIds,
-                    )}
-                    reloadDocument
-                  >
-                    월 리스트 보기
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link
-                    to={buildLedgerWeekListLink(
-                      monthToken,
-                      selectedFilter,
-                      selectedDisplayOptions,
-                      showCurrentWeekBudget,
-                      selectedCategoryIds,
-                    )}
-                    reloadDocument
-                  >
-                    주별 리스트 보기
-                  </Link>
-                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
 
@@ -1614,7 +1586,7 @@ export default function LedgerPage() {
                       </span>
                       {routineMarkers.length > 0 ? (
                         <div className="pointer-events-none absolute left-full top-0.5 ml-0.5 flex min-w-0 items-center gap-0.5">
-                          {routineMarkers.slice(0, 2).map((marker, index) => (
+                          {routineMarkers.slice(0, routineMarkers.length >= 4 ? 2 : 3).map((marker, index) => (
                             <span
                               key={`${marker.sortOrder}-${index}`}
                               className={cn(
@@ -1624,7 +1596,7 @@ export default function LedgerPage() {
                               style={{ backgroundColor: marker.color ?? "#94a3b8" }}
                             />
                           ))}
-                          {routineMarkers.length > 2 ? (
+                          {routineMarkers.length >= 4 ? (
                             <span className={cn("text-[8px] font-medium text-slate-400", isOutsideMonth && "opacity-60")}>
                               +{routineMarkers.length - 2}
                             </span>

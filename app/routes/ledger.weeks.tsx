@@ -58,6 +58,18 @@ function getAmountClass(type: LedgerEntryTypeValue) {
   return "text-emerald-600";
 }
 
+function getBudgetResultClass(type: LedgerEntryTypeValue, amount: number) {
+  if (type === "EXPENSE") {
+    return amount < 0 ? "text-rose-500" : "text-slate-500";
+  }
+
+  if (type === "INCOME") {
+    return amount < 0 ? "text-sky-600" : "text-slate-500";
+  }
+
+  return amount < 0 ? "text-emerald-600" : "text-slate-500";
+}
+
 function formatWeekRangeLabel(start: Date, end: Date) {
   const displayEnd = new Date(end);
   displayEnd.setDate(displayEnd.getDate() - 1);
@@ -375,6 +387,11 @@ export default function LedgerWeeksPage() {
         }
 
         const weekBudget = findWeeklyBudgetStateForRange(range, weeklyBudgetStateByDate);
+        const typeTotalAmount = rangeEntries.reduce((sum, entry) => sum + entry.amount, 0);
+        const typeResultAmount =
+          selectedFilter !== "ALL" && weekBudget && selectedCategoryIds.length === 0
+            ? Math.round((weekBudget.target - typeTotalAmount) * 100) / 100
+            : null;
         const isCurrentWeek =
           showCurrentWeekBudget &&
           currentWeekBudget &&
@@ -389,12 +406,24 @@ export default function LedgerWeeksPage() {
             dateLabel: group.dateLabel,
             entries: group.entries,
           })),
+          typeTotalAmount,
+          typeResultAmount,
           weekBudget,
           isCurrentWeek,
         };
       })
       .filter((group) => group.dateGroups.length > 0 || group.weekBudget !== null);
-  }, [currentWeekBudget, filteredEntries, monthStart, nextMonthStart, showCurrentWeekBudget, weekStartDay, weeklyBudgetStateByDate]);
+  }, [
+    currentWeekBudget,
+    filteredEntries,
+    monthStart,
+    nextMonthStart,
+    selectedCategoryIds.length,
+    selectedFilter,
+    showCurrentWeekBudget,
+    weekStartDay,
+    weeklyBudgetStateByDate,
+  ]);
 
   const canCollapseCategoryFilters = categories.length > 6;
   const shouldShowCategoryFilters = !canCollapseCategoryFilters || isCategoryFiltersExpanded || selectedCategoryIds.length > 0;
@@ -620,7 +649,18 @@ export default function LedgerWeeksPage() {
                   <section key={group.id} className={cn("border-b bg-white", group.isCurrentWeek ? "bg-amber-50/50" : "")}>
                     <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-2">
                       <p className="text-[0.84rem] font-semibold text-slate-800">{group.label}</p>
-                      {group.weekBudget ? (
+                      {selectedFilter !== "ALL" ? (
+                        <div className="shrink-0 text-right">
+                          <p className={cn("text-[0.78rem] font-semibold", getAmountClass(selectedFilter))}>
+                            {formatLedgerAmount(group.typeTotalAmount)}
+                          </p>
+                          {group.typeResultAmount !== null ? (
+                            <p className={cn("mt-0.5 text-[0.64rem] font-medium", getBudgetResultClass(selectedFilter, group.typeResultAmount))}>
+                              결과 {formatLedgerAmount(group.typeResultAmount)}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : group.weekBudget ? (
                         <p
                           className={cn(
                             "shrink-0 text-[0.76rem] font-semibold",
