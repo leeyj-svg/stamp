@@ -1,11 +1,12 @@
 import { useMemo } from "react";
 
-import { getMonthStart, getMonthWeekRanges } from "~/lib/ledger-listing";
+import { getMonthWeekRanges } from "~/lib/ledger-listing";
 import { cn } from "~/lib/utils";
 
 type RoutineWeekPanelProps = {
-  monthToken: string;
   weekStartDay: "SUNDAY" | "MONDAY";
+  displayRangeStartAt: string;
+  displayRangeEndAt: string;
   routineTypes: Array<{
     id: number;
     name: string;
@@ -50,11 +51,17 @@ function getPercent(successCount: number, goalCount: number | null) {
   return Math.max(0, Math.round((successCount / goalCount) * 100));
 }
 
-export function RoutineWeekPanel({ monthToken, weekStartDay, routineTypes, routineRecords }: RoutineWeekPanelProps) {
+export function RoutineWeekPanel({
+  weekStartDay,
+  displayRangeStartAt,
+  displayRangeEndAt,
+  routineTypes,
+  routineRecords,
+}: RoutineWeekPanelProps) {
   const weekGroups = useMemo(() => {
-    const monthStart = getMonthStart(monthToken);
-    const nextMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1, 0, 0, 0, 0);
-    const ranges = getMonthWeekRanges(monthStart, nextMonthStart, weekStartDay);
+    const displayRangeStart = new Date(displayRangeStartAt);
+    const displayRangeEnd = new Date(displayRangeEndAt);
+    const ranges = getMonthWeekRanges(displayRangeStart, displayRangeEnd, weekStartDay);
 
     return ranges.map((range, index) => {
       const summaries = routineTypes.map((type) => {
@@ -87,7 +94,7 @@ export function RoutineWeekPanel({ monthToken, weekStartDay, routineTypes, routi
         summaries,
       };
     });
-  }, [monthToken, routineRecords, routineTypes, weekStartDay]);
+  }, [displayRangeEndAt, displayRangeStartAt, routineRecords, routineTypes, weekStartDay]);
 
   const hasAnyRoutine = routineTypes.length > 0;
 
