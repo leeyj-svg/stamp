@@ -2,9 +2,7 @@
 import { db } from "~/lib/db.server";
 import { getSession as getAuthSession } from "~/lib/auth.server";
 import { getFlashSession, commitSession } from "~/lib/session.server";
-import { sendAlimtalk, AlimtalkType } from "~/lib/alimtalk.server";
-
-const STAMPS_PER_CARD = 10;
+import { sendStampProgressAlimtalk } from "~/lib/stamp-notification.server";
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "스탬프 적립 중 알 수 없는 오류가 발생했습니다.";
@@ -143,12 +141,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     const appUrl = process.env.APP_URL ?? new URL(request.url).origin;
-    await sendAlimtalk(AlimtalkType.STAMP_ACQUIRED, user.phoneNumber, {
-      고객명: user.name,
-      활동명: stampNotification.eventName,
-      현재개수: String(stampNotification.currentStampCount),
-      남은스탬프개수: String(Math.max(0, STAMPS_PER_CARD - stampNotification.currentStampCount)),
-      link: `${appUrl}/card`,
+    await sendStampProgressAlimtalk({
+      phoneNumber: user.phoneNumber,
+      customerName: user.name,
+      eventName: stampNotification.eventName,
+      currentCount: stampNotification.currentStampCount,
+      appUrl,
     }).catch((error) => {
       console.error(`[Alimtalk Error] Failed to send STAMP_ACQUIRED to ${user.phoneNumber.slice(-4)}`, error);
     });

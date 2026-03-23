@@ -34,8 +34,7 @@ import { db } from '~/lib/db.server';
 import { lucia, hashPassword } from '~/lib/auth.server';
 import { getFlashSession, commitSession } from '~/lib/session.server';
 import { sendAlimtalk, AlimtalkType } from '~/lib/alimtalk.server';
-
-const STAMPS_PER_CARD = 10;
+import { sendStampProgressAlimtalk } from '~/lib/stamp-notification.server';
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
@@ -225,14 +224,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     if (transactionResult.stampNotification) {
       notificationJobs.push(
-        sendAlimtalk(AlimtalkType.STAMP_ACQUIRED, phoneNumber, {
-          고객명: name,
-          활동명: transactionResult.stampNotification.eventName,
-          현재개수: String(transactionResult.stampNotification.currentCount),
-          남은스탬프개수: String(
-            Math.max(0, STAMPS_PER_CARD - transactionResult.stampNotification.currentCount)
-          ),
-          link: `${appUrl}/card`,
+        sendStampProgressAlimtalk({
+          phoneNumber,
+          customerName: name,
+          eventName: transactionResult.stampNotification.eventName,
+          currentCount: transactionResult.stampNotification.currentCount,
+          appUrl,
         })
       );
     }

@@ -1,11 +1,10 @@
 import { Prisma } from '@prisma/client';
 import { type ActionFunctionArgs } from 'react-router';
 import { customAlphabet } from 'nanoid';
-import { format } from 'date-fns';
 
 import { db } from '~/lib/db.server';
 import { getSession, getSessionWithPermission } from '~/lib/auth.server';
-import { sendAlimtalk, AlimtalkType } from '~/lib/alimtalk.server';
+import { sendCouponIssuedAlimtalk } from '~/lib/stamp-notification.server';
 
 const STAMPS_PER_CARD = 10;
 const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 12);
@@ -101,16 +100,6 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
         return { coupon, expiresAt };
       });
 
-      const appUrl = process.env.APP_URL ?? new URL(request.url).origin;
-      sendAlimtalk(AlimtalkType.COUPON_ISSUED, user.phoneNumber, {
-        고객명: user.name,
-        쿠폰설명: coupon.description,
-        만료일자: format(expiresAt, 'yyyy-MM-dd'),
-        link: `${appUrl}/card`,
-      }).catch((error) => {
-        console.error('쿠폰 알림톡 발송 실패:', error);
-      });
-
       return {
         success: true,
         message: '쿠폰이 성공적으로 발급되었습니다.',
@@ -178,6 +167,64 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
 
       console.error('쿠폰 상태 변경 오류:', error);
       return { success: false, error: '쿠폰 상태를 업데이트할 수 없습니다.' };
+    }
+  }
+
+  if (intent === 'resendCouponNotification') {
+    await getSessionWithPermission(request, 'ADMIN');
+
+    const couponId = formData.get('couponId');
+    if (typeof couponId !== 'string' || !couponId) {
+      return { success: false, error: '유효하지 않은 쿠폰 ID입니다.' };
+    }
+
+    try {
+      const coupon = await db.coupon.findUnique({
+        where: { id: couponId },
+        select: {
+          id: true,
+          description: true,
+          expiresAt: true,
+          stampCard: {
+            select: {
+              user: {
+                select: {
+                  name: true,
+                  phoneNumber: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!coupon) {
+        throw new ActionError('쿠폰을 찾을 수 없습니다.');
+      }
+
+      const customerName = coupon.stampCard.user.name?.trim();
+      const phoneNumber = coupon.stampCard.user.phoneNumber?.trim();
+
+      if (!customerName || !phoneNumber) {
+        throw new ActionError('쿠폰 사용자 정보가 부족해서 알림톡을 재발송할 수 없습니다.');
+      }
+
+      await sendCouponIssuedAlimtalk({
+        phoneNumber,
+        customerName,
+        description: coupon.description,
+        expiresAt: coupon.expiresAt,
+        appUrl: process.env.APP_URL ?? new URL(request.url).origin,
+      });
+
+      return { success: true, message: '쿠폰 발급 알림톡을 다시 보냈습니다.' };
+    } catch (error) {
+      if (error instanceof ActionError) {
+        return { success: false, error: error.message };
+      }
+
+      console.error('쿠폰 알림톡 재발송 오류:', error);
+      return { success: false, error: '쿠폰 알림톡을 다시 보낼 수 없습니다.' };
     }
   }
 

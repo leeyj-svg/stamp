@@ -12,7 +12,7 @@ import { UserStatus } from '@prisma/client';
 import { EventForm } from '~/components/eventform';
 import { assertCategoryAccess, requireAdminAccessScope } from '~/lib/admin-access.server';
 import { db } from '~/lib/db.server';
-import { sendAlimtalk, AlimtalkType } from '~/lib/alimtalk.server';
+import { sendStampProgressAlimtalk } from '~/lib/stamp-notification.server';
 import { commitSession, getFlashSession } from '~/lib/session.server';
 import { deleteImages, uploadImages } from '~/lib/upload.server';
 
@@ -365,12 +365,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const appUrl = process.env.APP_URL ?? new URL(request.url).origin;
     await Promise.allSettled(
       alimtalkData.map((data) =>
-        sendAlimtalk(AlimtalkType.STAMP_ACQUIRED, data.phoneNumber, {
-          고객명: data.name,
-          활동명: name,
-          현재개수: String(data.currentCount),
-          남은스탬프개수: String(Math.max(0, STAMPS_PER_CARD - data.currentCount)),
-          link: `${appUrl}/card`,
+        sendStampProgressAlimtalk({
+          phoneNumber: data.phoneNumber,
+          customerName: data.name,
+          eventName: name,
+          currentCount: data.currentCount,
+          appUrl,
         }).catch(() => {
           console.error(
             `[Alimtalk Error] Failed to send to ${data.name.slice(0, 1)}**(${data.phoneNumber.slice(-4)})`

@@ -2,7 +2,9 @@ import { Form, useFetcher, useLoaderData, useSearchParams, type LoaderFunctionAr
 import { Prisma } from "@prisma/client";
 import { format } from "date-fns";
 import { ko } from "date-fns/locale";
-import { Calendar, Search, Ticket, User } from "lucide-react";
+import { Calendar, MessageSquareMore, Search, Ticket, User } from "lucide-react";
+import { useEffect } from "react";
+import { toast } from "sonner";
 
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -147,14 +149,31 @@ export default function AdminCouponsPage() {
 }
 
 function CouponCard({ coupon }: { coupon: CouponItem }) {
-  const fetcher = useFetcher();
-  const isSubmitting = fetcher.state !== "idle";
+  const statusFetcher = useFetcher<{ success: boolean; error?: string }>();
+  const resendFetcher = useFetcher<{ success: boolean; error?: string; message?: string }>();
+  const isStatusSubmitting = statusFetcher.state !== "idle";
+  const isResendSubmitting = resendFetcher.state !== "idle";
 
-  const optimisticIsUsed = isSubmitting ? !coupon.isUsed : coupon.isUsed;
+  const optimisticIsUsed = isStatusSubmitting ? !coupon.isUsed : coupon.isUsed;
   const isExpired = new Date(coupon.expiresAt).getTime() < Date.now();
 
   const statusLabel = optimisticIsUsed ? "사용 완료" : isExpired ? "만료" : "미사용";
   const statusVariant = optimisticIsUsed ? "secondary" : isExpired ? "destructive" : "default";
+
+  useEffect(() => {
+    if (resendFetcher.state !== "idle" || !resendFetcher.data) {
+      return;
+    }
+
+    if (resendFetcher.data.success) {
+      toast.success(resendFetcher.data.message ?? "알림톡을 다시 보냈습니다.");
+      return;
+    }
+
+    if (resendFetcher.data.error) {
+      toast.error(resendFetcher.data.error);
+    }
+  }, [resendFetcher.data, resendFetcher.state]);
 
   return (
     <Card className={`flex flex-col transition-all ${optimisticIsUsed ? "bg-muted/50" : "bg-background"}`}>
@@ -179,10 +198,26 @@ function CouponCard({ coupon }: { coupon: CouponItem }) {
         </div>
       </CardContent>
       <CardFooter className="border-t pt-4">
-        <fetcher.Form method="post" action="/api/coupons/issue" className="w-full">
+        <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <resendFetcher.Form method="post" action="/api/coupons/issue">
+            <input type="hidden" name="intent" value="resendCouponNotification" />
+            <input type="hidden" name="couponId" value={coupon.id} />
+            <Button
+              type="submit"
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs text-muted-foreground"
+              disabled={isResendSubmitting}
+            >
+              <MessageSquareMore className="mr-1 h-3.5 w-3.5" />
+              쿠폰 발급 재발송
+            </Button>
+          </resendFetcher.Form>
+
+          <statusFetcher.Form method="post" action="/api/coupons/issue" className="w-full sm:w-auto">
           <input type="hidden" name="intent" value="toggleCouponStatus" />
           <input type="hidden" name="couponId" value={coupon.id} />
-          <div className="flex w-full items-center justify-between">
+          <div className="flex w-full items-center justify-between sm:min-w-[8rem]">
             <Label
               htmlFor={`coupon-switch-${coupon.id}`}
               className={optimisticIsUsed ? "text-muted-foreground" : ""}
@@ -193,16 +228,17 @@ function CouponCard({ coupon }: { coupon: CouponItem }) {
               id={`coupon-switch-${coupon.id}`}
               checked={optimisticIsUsed}
               onCheckedChange={() => {
-                fetcher.submit(
+                statusFetcher.submit(
                   { couponId: coupon.id, intent: "toggleCouponStatus" },
                   { method: "post", action: "/api/coupons/issue" }
                 );
               }}
-              disabled={isSubmitting}
+              disabled={isStatusSubmitting}
               aria-label="쿠폰 사용 상태 변경"
             />
           </div>
-        </fetcher.Form>
+          </statusFetcher.Form>
+        </div>
       </CardFooter>
     </Card>
   );
