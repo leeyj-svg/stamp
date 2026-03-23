@@ -632,6 +632,13 @@ export default function LedgerStatsPage() {
       }).format(getMonthStart(monthToken)),
     [monthToken],
   );
+  const prevShortMonthLabel = useMemo(
+    () =>
+      new Intl.DateTimeFormat("ko-KR", {
+        month: "numeric",
+      }).format(getMonthStart(prevMonthToken)),
+    [prevMonthToken],
+  );
   const prevStatsRangeLabel = periodBasis === "PAYDAY" ? previousPeriodLabel : getMonthLabel(getMonthStart(prevMonthToken));
   const todayStart = useMemo(() => new Date(`${todayDateToken}T00:00:00`), [todayDateToken]);
   const nextDayStart = useMemo(() => new Date(`${todayDateToken}T23:59:59.999`), [todayDateToken]);
@@ -937,30 +944,6 @@ export default function LedgerStatsPage() {
       .sort((left, right) => right.amount - left.amount || left.label.localeCompare(right.label, "ko"));
   }, [expenseEntries]);
 
-  const tagStats = useMemo(() => {
-    const grouped = new Map<string, { count: number; linkedAmount: number }>();
-
-    for (const entry of filteredEntries) {
-      for (const tagName of entry.tagNames) {
-        const current = grouped.get(tagName) ?? { count: 0, linkedAmount: 0 };
-        current.count += 1;
-        current.linkedAmount += entry.amount;
-        grouped.set(tagName, current);
-      }
-    }
-
-    const totalCount = Array.from(grouped.values()).reduce((sum, item) => sum + item.count, 0);
-
-    return Array.from(grouped.entries())
-      .map(([label, value]) => ({
-        label,
-        count: value.count,
-        linkedAmount: value.linkedAmount,
-        percent: roundPercent(value.count, totalCount),
-      }))
-      .sort((left, right) => right.count - left.count || right.linkedAmount - left.linkedAmount);
-  }, [filteredEntries]);
-
   const dailyStats = useMemo(() => {
     const grouped = new Map<string, { income: number; expense: number; saving: number }>();
 
@@ -1057,6 +1040,8 @@ export default function LedgerStatsPage() {
   const [statsTab, setStatsTab] = useState<StatsTabValue>("SUMMARY");
   const [categoryTab, setCategoryTab] = useState<LedgerEntryTypeValue>("EXPENSE");
   const [categoryChartView, setCategoryChartView] = useState<CategoryChartViewValue>("DONUT");
+  const [tagTypeTab, setTagTypeTab] = useState<LedgerEntryTypeValue>("EXPENSE");
+  const [selectedTagCategoryIds, setSelectedTagCategoryIds] = useState<number[]>([]);
   const activeCategorySection = useMemo(() => {
     if (selectedFilter !== "ALL") {
       return categorySections[0] ?? null;
@@ -1064,6 +1049,64 @@ export default function LedgerStatsPage() {
 
     return categorySections.find((section) => section.type === categoryTab) ?? categorySections[0] ?? null;
   }, [categorySections, categoryTab, selectedFilter]);
+  const tagFocusType: LedgerEntryTypeValue = selectedFilter === "ALL" ? tagTypeTab : selectedFilter;
+  const tagCategoryOptions = useMemo(() => {
+    const grouped = new Map<number, string>();
+
+    for (const entry of entries) {
+      if (entry.type !== tagFocusType || entry.categoryId === null || !entry.categoryName) {
+        continue;
+      }
+
+      grouped.set(entry.categoryId, entry.categoryName);
+    }
+
+    return Array.from(grouped.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((left, right) => left.name.localeCompare(right.name, "ko"));
+  }, [entries, tagFocusType]);
+  const effectiveSelectedTagCategoryIds = useMemo(
+    () => selectedTagCategoryIds.filter((id) => tagCategoryOptions.some((category) => category.id === id)),
+    [selectedTagCategoryIds, tagCategoryOptions],
+  );
+  const tagEntries = useMemo(() => {
+    const baseEntries = entries.filter((entry) => entry.type === tagFocusType);
+
+    if (effectiveSelectedTagCategoryIds.length === 0) {
+      return baseEntries;
+    }
+
+    const selectedIdSet = new Set(effectiveSelectedTagCategoryIds);
+    return baseEntries.filter((entry) => entry.categoryId !== null && selectedIdSet.has(entry.categoryId));
+  }, [effectiveSelectedTagCategoryIds, entries, tagFocusType]);
+  const toggleTagCategoryFilter = (categoryId: number) => {
+    setSelectedTagCategoryIds((current) =>
+      current.includes(categoryId) ? current.filter((id) => id !== categoryId) : [...current, categoryId],
+    );
+  };
+  const tagStats = useMemo(() => {
+    const grouped = new Map<string, { count: number; linkedAmount: number }>();
+
+    for (const entry of tagEntries) {
+      for (const tagName of entry.tagNames) {
+        const current = grouped.get(tagName) ?? { count: 0, linkedAmount: 0 };
+        current.count += 1;
+        current.linkedAmount += entry.amount;
+        grouped.set(tagName, current);
+      }
+    }
+
+    const totalCount = Array.from(grouped.values()).reduce((sum, item) => sum + item.count, 0);
+
+    return Array.from(grouped.entries())
+      .map(([label, value]) => ({
+        label,
+        count: value.count,
+        linkedAmount: value.linkedAmount,
+        percent: roundPercent(value.count, totalCount),
+      }))
+      .sort((left, right) => right.count - left.count || right.linkedAmount - left.linkedAmount);
+  }, [tagEntries]);
   const categoryBudgetSections = useMemo(() => {
     const totalsByType = new Map<LedgerEntryTypeValue, Map<number, CategoryBudgetUsageItem>>();
 
@@ -1333,8 +1376,7 @@ export default function LedgerStatsPage() {
             </Button>
             <div className="min-w-[9rem] text-center">
               <h1 className="text-[0.96rem] font-semibold text-slate-900">통계</h1>
-              <p className="text-[0.82rem] text-slate-500">{monthLabel}</p>
-              {periodBasis === "PAYDAY" ? <p className="text-[0.68rem] text-slate-400">{periodLabel}</p> : null}
+              <p className="text-[0.74rem] text-slate-500">{statsRangeLabel}</p>
             </div>
             <Button asChild variant="ghost" size="icon" className="h-10 w-10 rounded-full text-slate-700">
               <Link to={buildLedgerStatsLink(nextMonthToken, selectedFilter)}>
@@ -1505,8 +1547,8 @@ export default function LedgerStatsPage() {
               </StatSection>
             ) : null}
 
-            <StatSection title="전월 대비 증감" description={`${prevStatsRangeLabel}과 비교했어요.`}>
-              <ComparisonGraphList items={comparisonGraphItems} previousLabel={prevStatsRangeLabel} currentLabel={statsRangeLabel} />
+            <StatSection title="전월 대비 증감" description={`${prevShortMonthLabel}과 비교했어요.`}>
+              <ComparisonGraphList items={comparisonGraphItems} previousLabel={prevShortMonthLabel} currentLabel={shortMonthLabel} />
             </StatSection>
           </>
         ) : null}
@@ -1639,7 +1681,70 @@ export default function LedgerStatsPage() {
             ) : null}
 
             <StatSection title="태그별 사용">
-              <TagStatList items={tagStats} emptyMessage="아직 태그가 달린 내역이 없습니다." />
+              {selectedFilter === "ALL" ? (
+                <div className="mb-3 grid grid-cols-3 rounded-xl bg-slate-100 p-1">
+                  {(["INCOME", "EXPENSE", "SAVING"] as const).map((type) => {
+                    const isActive = tagFocusType === type;
+
+                    return (
+                      <button
+                        key={type}
+                        type="button"
+                        className={cn(
+                          "rounded-lg px-2 py-1.5 text-[0.74rem] font-medium transition-colors",
+                          isActive ? "bg-white text-slate-900 shadow-sm" : "text-slate-500",
+                        )}
+                        onClick={() => setTagTypeTab(type)}
+                      >
+                        {getTypeLabel(type)}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {tagCategoryOptions.length > 0 ? (
+                <div className="mb-3 flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex items-center rounded-full border px-2.5 py-1 text-[0.68rem] font-medium transition-colors",
+                      effectiveSelectedTagCategoryIds.length === 0
+                        ? "border-slate-300 bg-slate-100 text-slate-700"
+                        : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+                    )}
+                    onClick={() => setSelectedTagCategoryIds([])}
+                  >
+                    전체
+                  </button>
+                  {tagCategoryOptions.map((category) => {
+                    const isSelected = effectiveSelectedTagCategoryIds.includes(category.id);
+
+                    return (
+                      <button
+                        key={category.id}
+                        type="button"
+                        className={cn(
+                          "inline-flex items-center rounded-full border px-2.5 py-1 text-[0.68rem] font-medium transition-colors",
+                          isSelected
+                            ? "border-slate-300 bg-slate-100 text-slate-700"
+                            : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+                        )}
+                        onClick={() => toggleTagCategoryFilter(category.id)}
+                      >
+                        {category.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              <TagStatList
+                items={tagStats}
+                emptyMessage={
+                  effectiveSelectedTagCategoryIds.length > 0
+                    ? "선택한 카테고리에는 아직 태그가 달린 내역이 없습니다."
+                    : "아직 태그가 달린 내역이 없습니다."
+                }
+              />
             </StatSection>
 
             <StatSection title="이번 달 포인트">

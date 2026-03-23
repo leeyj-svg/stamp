@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
 import { getSessionWithPermission } from "~/lib/auth.server";
+import { getBudgetDisplayTotalAmount, getBudgetPeriodDayCount } from "~/lib/ledger-budget";
 import { ensureLedgerBudgetPeriodForDate, getCurrentLedgerWeekBudgetSummary } from "~/lib/ledger-budget.server";
 import { db } from "~/lib/db.server";
 import {
@@ -20,11 +21,11 @@ import {
   buildLedgerListLink,
   buildLedgerMonthLink,
   buildLedgerWeekListLink,
+  buildPeriodRemainingBudgetUntilDate,
   buildWeeklyBudgetStateByDate,
   findWeeklyBudgetStateForRange,
   formatEntryTimeLine,
   getCategoryChipClass,
-  getMonthLabel,
   getMonthStart,
   getMonthWeekRanges,
   parseCategoryIds,
@@ -77,6 +78,20 @@ function formatWeekRangeLabel(start: Date, end: Date) {
   return `${start.getMonth() + 1}/${start.getDate()} - ${displayEnd.getMonth() + 1}/${displayEnd.getDate()}`;
 }
 
+function formatFullPeriodLabel(start: Date, endExclusive: Date) {
+  const displayEnd = new Date(endExclusive);
+  displayEnd.setDate(displayEnd.getDate() - 1);
+
+  const startYear = start.getFullYear();
+  const startMonth = `${start.getMonth() + 1}`.padStart(2, "0");
+  const startDay = `${start.getDate()}`.padStart(2, "0");
+  const endYear = displayEnd.getFullYear();
+  const endMonth = `${displayEnd.getMonth() + 1}`.padStart(2, "0");
+  const endDay = `${displayEnd.getDate()}`.padStart(2, "0");
+
+  return `${startYear}.${startMonth}.${startDay}~${endYear}.${endMonth}.${endDay}`;
+}
+
 function parseWeekPanelView(value: string | null): WeekPanelView {
   return value === "routine" ? "routine" : "ledger";
 }
@@ -124,8 +139,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     loadLedgerCategories(db, user.id),
   ]);
 
+  const periodBasis = startBudgetResult.settings.defaultPeriodBasis;
+  const displayRangeStart = periodBasis === "PAYDAY" ? new Date(startBudgetResult.period.periodStartAt) : monthStart;
+  const displayRangeEnd = periodBasis === "PAYDAY" ? new Date(startBudgetResult.period.periodEndAt) : nextMonthStart;
+  const displayRangeLabel = formatFullPeriodLabel(displayRangeStart, displayRangeEnd);
+
   const budgetPeriodsById = new Map<number, LedgerListBudgetPeriodSummary>();
-  for (const period of [startBudgetResult.period, endBudgetResult.period]) {
+  for (const period of periodBasis === "PAYDAY" ? [startBudgetResult.period] : [startBudgetResult.period, endBudgetResult.period]) {
     budgetPeriodsById.set(period.id, {
       id: period.id,
       periodStartAt: period.periodStartAt.toISOString(),
@@ -152,23 +172,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const budgetPeriods = Array.from(budgetPeriodsById.values());
-  const monthWeekRanges = getMonthWeekRanges(monthStart, nextMonthStart, startBudgetResult.settings.weekStartDay);
-  const routineRangeStart = monthWeekRanges[0]?.start ?? monthStart;
-  const routineRangeEnd = monthWeekRanges[monthWeekRanges.length - 1]?.end ?? nextMonthStart;
+  const displayWeekRanges = getMonthWeekRanges(displayRangeStart, displayRangeEnd, startBudgetResult.settings.weekStartDay);
+  const routineRangeStart = displayWeekRanges[0]?.start ?? displayRangeStart;
+  const routineRangeEnd = displayWeekRanges[displayWeekRanges.length - 1]?.end ?? displayRangeEnd;
 
   const entryRangeStart = budgetPeriods.reduce(
     (start, period) => {
       const periodStartAt = new Date(period.periodStartAt);
       return periodStartAt < start ? periodStartAt : start;
     },
-    new Date(monthStart.getFullYear(), monthStart.getMonth(), 1, 0, 0, 0, 0),
+    new Date(displayRangeStart),
   );
   const entryRangeEnd = budgetPeriods.reduce(
     (end, period) => {
       const periodEndAt = new Date(period.periodEndAt);
       return periodEndAt > end ? periodEndAt : end;
     },
-    nextMonthStart,
+    new Date(displayRangeEnd),
   );
 
   const [entries, routineTypes, routineRecords] = await Promise.all([
@@ -213,7 +233,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     monthToken,
-    monthLabel: getMonthLabel(monthStart),
+    monthLabel: displayRangeLabel,
     prevMonthToken: shiftMonthToken(monthToken, -1),
     nextMonthToken: shiftMonthToken(monthToken, 1),
     selectedFilter,
@@ -222,7 +242,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     showCurrentWeekBudget,
     displayParam,
     budgetFocusType,
+    periodBasis,
     weekStartDay: startBudgetResult.settings.weekStartDay,
+    displayRangeStartAt: displayRangeStart.toISOString(),
+    displayRangeEndAt: displayRangeEnd.toISOString(),
     currentWeekBudget: currentWeekBudget
       ? {
           weekStartAt: currentWeekBudget.weekStartAt,
@@ -284,6 +307,8 @@ export default function LedgerWeeksPage() {
     displayParam,
     budgetFocusType,
     weekStartDay,
+    displayRangeStartAt,
+    displayRangeEndAt,
     currentWeekBudget,
     budgetPeriods,
     categories,
@@ -294,27 +319,24 @@ export default function LedgerWeeksPage() {
   const navigate = useNavigate();
   const [isCategoryFiltersExpanded, setIsCategoryFiltersExpanded] = useState(false);
   const [touchStartPoint, setTouchStartPoint] = useState<{ x: number; y: number } | null>(null);
-  const monthStart = useMemo(() => getMonthStart(monthToken), [monthToken]);
-  const nextMonthStart = useMemo(
-    () => new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1, 0, 0, 0, 0),
-    [monthStart],
-  );
+  const displayRangeStart = useMemo(() => new Date(displayRangeStartAt), [displayRangeStartAt]);
+  const displayRangeEnd = useMemo(() => new Date(displayRangeEndAt), [displayRangeEndAt]);
 
-  const monthEntries = useMemo(
+  const periodEntries = useMemo(
     () =>
       entries.filter((entry) => {
         const usedAt = new Date(entry.usedAt);
-        return usedAt >= monthStart && usedAt < nextMonthStart;
+        return usedAt >= displayRangeStart && usedAt < displayRangeEnd;
       }),
-    [entries, monthStart, nextMonthStart],
+    [displayRangeEnd, displayRangeStart, entries],
   );
 
   const filteredEntries = useMemo(() => {
-    const typeEntries = selectedFilter === "ALL" ? monthEntries : monthEntries.filter((entry) => entry.type === selectedFilter);
+    const typeEntries = selectedFilter === "ALL" ? periodEntries : periodEntries.filter((entry) => entry.type === selectedFilter);
     return selectedCategoryIds.length === 0
       ? typeEntries
       : typeEntries.filter((entry) => entry.categoryId !== null && selectedCategoryIds.includes(entry.categoryId));
-  }, [monthEntries, selectedCategoryIds, selectedFilter]);
+  }, [periodEntries, selectedCategoryIds, selectedFilter]);
 
   const summary = useMemo(
     () =>
@@ -329,6 +351,39 @@ export default function LedgerWeeksPage() {
       ),
     [filteredEntries],
   );
+  const monthlyGoalSummary =
+    selectedFilter !== "ALL" && selectedCategoryIds.length === 0
+      ? (() => {
+          const monthTargetAmount = budgetPeriods.reduce((sum, period) => {
+            const periodStartAt = new Date(period.periodStartAt);
+            const periodEndAt = new Date(period.periodEndAt);
+            const overlapStart = Math.max(periodStartAt.getTime(), displayRangeStart.getTime());
+            const overlapEnd = Math.min(periodEndAt.getTime(), displayRangeEnd.getTime());
+            const overlapDays = Math.max(0, Math.round((overlapEnd - overlapStart) / (1000 * 60 * 60 * 24)));
+
+            if (overlapDays <= 0) {
+              return sum;
+            }
+
+            const plan = period.plans.find((item) => item.type === selectedFilter);
+            if (!plan || plan.totalAmount <= 0) {
+              return sum;
+            }
+
+            const totalAmount = getBudgetDisplayTotalAmount(selectedFilter, plan.totalAmount, plan.allocations);
+            const overlapRatio = overlapDays / Math.max(getBudgetPeriodDayCount(period), 1);
+            return sum + totalAmount * overlapRatio;
+          }, 0);
+
+          const actualAmount =
+            selectedFilter === "INCOME" ? summary.income : selectedFilter === "EXPENSE" ? summary.expense : summary.saving;
+          return {
+            actualAmount,
+            remainingAmount: Math.round((monthTargetAmount - actualAmount) * 100) / 100,
+            remainingLabel: selectedFilter === "EXPENSE" ? "남은 예산" : "남은 목표",
+          };
+        })()
+      : null;
 
   const budgetStatsEntries = useMemo<LedgerListBudgetEntrySummary[]>(
     () =>
@@ -356,7 +411,7 @@ export default function LedgerWeeksPage() {
   );
 
   const weekGroups = useMemo(() => {
-    const ranges = getMonthWeekRanges(monthStart, nextMonthStart, weekStartDay);
+    const ranges = getMonthWeekRanges(displayRangeStart, displayRangeEnd, weekStartDay);
 
     return ranges
       .map((range, index) => {
@@ -388,9 +443,24 @@ export default function LedgerWeeksPage() {
 
         const weekBudget = findWeeklyBudgetStateForRange(range, weeklyBudgetStateByDate);
         const typeTotalAmount = rangeEntries.reduce((sum, entry) => sum + entry.amount, 0);
+        const periodRemainingBudget =
+          selectedFilter !== "ALL" && selectedFilter !== "EXPENSE" && selectedCategoryIds.length === 0
+            ? buildPeriodRemainingBudgetUntilDate({
+                budgetPeriods,
+                budgetFocusType: selectedFilter,
+                budgetStatsEntries,
+                referenceEnd: range.end,
+              })
+            : null;
         const typeResultAmount =
-          selectedFilter !== "ALL" && weekBudget && selectedCategoryIds.length === 0
-            ? Math.round((weekBudget.target - typeTotalAmount) * 100) / 100
+          selectedFilter !== "ALL" && selectedCategoryIds.length === 0
+            ? selectedFilter === "EXPENSE"
+              ? weekBudget
+                ? Math.round((weekBudget.target - typeTotalAmount) * 100) / 100
+                : null
+              : periodRemainingBudget
+                ? periodRemainingBudget.remainingAmount
+                : null
             : null;
         const isCurrentWeek =
           showCurrentWeekBudget &&
@@ -415,9 +485,11 @@ export default function LedgerWeeksPage() {
       .filter((group) => group.dateGroups.length > 0 || group.weekBudget !== null);
   }, [
     currentWeekBudget,
+    budgetPeriods,
+    budgetStatsEntries,
+    displayRangeEnd,
+    displayRangeStart,
     filteredEntries,
-    monthStart,
-    nextMonthStart,
     selectedCategoryIds.length,
     selectedFilter,
     showCurrentWeekBudget,
@@ -508,8 +580,10 @@ export default function LedgerWeeksPage() {
                 <ChevronLeft className="h-6 w-6" />
               </Link>
             </Button>
-            <div className="min-w-0 text-center">
-              <h1 className="text-[1.15rem] font-semibold text-slate-900">{monthLabel}</h1>
+            <div className="min-w-0 max-w-[12rem] text-center">
+              <h1 className="truncate whitespace-nowrap text-[0.92rem] font-semibold tracking-[-0.01em] text-slate-900">
+                {monthLabel}
+              </h1>
               <div className="mt-1 inline-flex items-center gap-1.5 text-[10px] leading-none">
                 <button
                   type="button"
@@ -641,6 +715,19 @@ export default function LedgerWeeksPage() {
               </div>
             ) : null}
 
+            {monthlyGoalSummary ? (
+              <div className="border-b bg-white px-4 py-2.5">
+                <div className="flex items-center justify-end gap-3">
+                  <p className={cn("text-[0.82rem] font-semibold", getAmountClass(selectedFilter as LedgerEntryTypeValue))}>
+                    {formatLedgerAmount(monthlyGoalSummary.actualAmount)}
+                  </p>
+                  <p className={cn("text-[0.68rem] font-medium", getBudgetResultClass(selectedFilter as LedgerEntryTypeValue, monthlyGoalSummary.remainingAmount))}>
+                    {monthlyGoalSummary.remainingLabel} {formatLedgerAmount(monthlyGoalSummary.remainingAmount)}
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
             <div className="pb-20">
               {weekGroups.length === 0 ? (
                 <div className="px-4 py-8 text-center text-sm text-slate-500">아직 등록된 내역이 없습니다.</div>
@@ -654,9 +741,9 @@ export default function LedgerWeeksPage() {
                           <p className={cn("text-[0.78rem] font-semibold", getAmountClass(selectedFilter))}>
                             {formatLedgerAmount(group.typeTotalAmount)}
                           </p>
-                          {group.typeResultAmount !== null ? (
+                          {selectedFilter === "EXPENSE" && group.typeResultAmount !== null ? (
                             <p className={cn("mt-0.5 text-[0.64rem] font-medium", getBudgetResultClass(selectedFilter, group.typeResultAmount))}>
-                              결과 {formatLedgerAmount(group.typeResultAmount)}
+                              남은 예산 {formatLedgerAmount(group.typeResultAmount)}
                             </p>
                           ) : null}
                         </div>
@@ -752,8 +839,9 @@ export default function LedgerWeeksPage() {
 
           <div className="w-1/2 shrink-0">
             <RoutineWeekPanel
-              monthToken={monthToken}
               weekStartDay={weekStartDay}
+              displayRangeStartAt={displayRangeStartAt}
+              displayRangeEndAt={displayRangeEndAt}
               routineTypes={routineTypes}
               routineRecords={routineRecords}
             />

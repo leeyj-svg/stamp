@@ -410,6 +410,61 @@ export function buildPeriodRemainingBudget(params: {
   };
 }
 
+export function buildPeriodRemainingBudgetUntilDate(params: {
+  budgetPeriods: LedgerListBudgetPeriodSummary[];
+  budgetFocusType: LedgerEntryTypeValue;
+  budgetStatsEntries: LedgerListBudgetEntrySummary[];
+  referenceEnd: Date;
+}) {
+  const { budgetPeriods, budgetFocusType, budgetStatsEntries, referenceEnd } = params;
+  const referencePoint = new Date(referenceEnd.getTime() - 1);
+  const matchingPeriod =
+    budgetPeriods.find((period) => {
+      const periodStartAt = new Date(period.periodStartAt);
+      const periodEndAt = new Date(period.periodEndAt);
+      return referencePoint >= periodStartAt && referencePoint < periodEndAt;
+    }) ?? null;
+
+  if (!matchingPeriod) {
+    return null;
+  }
+
+  const matchingPlan = matchingPeriod.plans.find((plan) => plan.type === budgetFocusType);
+  if (!matchingPlan || matchingPlan.totalAmount <= 0) {
+    return null;
+  }
+
+  const displayTotalAmount = getBudgetDisplayTotalAmount(budgetFocusType, matchingPlan.totalAmount, matchingPlan.allocations);
+  if (displayTotalAmount <= 0) {
+    return null;
+  }
+
+  const periodStartAt = new Date(matchingPeriod.periodStartAt);
+  const periodEndAt = new Date(matchingPeriod.periodEndAt);
+  const fixedExpenseCategoryIds =
+    budgetFocusType === "EXPENSE" ? getFixedExpenseCategoryIds(matchingPlan.allocations) : new Set<number>();
+  const actualAmount = budgetStatsEntries.reduce((sum, entry) => {
+    const usedAt = new Date(entry.usedAt);
+    if (usedAt < periodStartAt || usedAt >= periodEndAt || usedAt >= referenceEnd) {
+      return sum;
+    }
+
+    if (budgetFocusType === "EXPENSE" && entry.categoryId !== null && fixedExpenseCategoryIds.has(entry.categoryId)) {
+      return sum;
+    }
+
+    return sum + entry.amount;
+  }, 0);
+
+  return {
+    target: displayTotalAmount,
+    actualAmount,
+    remainingAmount: Math.round((displayTotalAmount - actualAmount) * 100) / 100,
+    periodStartAt: matchingPeriod.periodStartAt,
+    periodEndAt: matchingPeriod.periodEndAt,
+  };
+}
+
 export function getMonthWeekRanges(monthStart: Date, nextMonthStart: Date, weekStartDay: LedgerWeekStartDayValue) {
   const ranges: Array<{ start: Date; end: Date }> = [];
   let cursor = getStartOfBudgetWeek(monthStart, weekStartDay);
