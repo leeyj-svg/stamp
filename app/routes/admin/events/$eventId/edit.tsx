@@ -6,15 +6,13 @@ import { db } from "~/lib/db.server";
 import { EventForm } from "~/components/eventform";
 import { getFlashSession, commitSession } from "~/lib/session.server";
 import { assertCategoryAccess, requireAdminAccessScope } from "~/lib/admin-access.server";
+import { STAMPS_PER_CARD, ensureCouponForCompletedStampCard } from "~/lib/stamp-coupon.server";
+import { sendStampProgressAlimtalk } from "~/lib/stamp-notification.server";
 import { uploadImages } from "~/lib/upload.server";
 import type { Participant } from "~/components/participantManager";
 import * as z from 'zod';
 import dayjs from 'dayjs';
 import { UserStatus } from "@prisma/client"; // UserStatus import 추가
-import { sendAlimtalk, AlimtalkType } from '~/lib/alimtalk.server'; // 알림톡 기능 추가
-
-// 💡 성능/확장성을 위해 상수는 한 곳에 정의합니다.
-const STAMPS_PER_CARD = 10;
 
 // loader: URL의 eventId를 사용해 수정할 이벤트의 데이터를 불러옵니다.
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
@@ -319,6 +317,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
                 const stampEntriesToCreate: { userId: string; eventId: string; stampCardId: number; }[] = [];
                 const newCardsToCreate: { userId: string }[] = [];
+                const completedCardIds = new Set<number>();
 
                 // 3. 메모리 내에서 카드 할당 및 알림톡 데이터 수집
                 for (const userId of userIdsToAddNewEntry) {
@@ -331,6 +330,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
                     if (incompleteCard) {
                         targetCardId = incompleteCard.id;
                         currentStampCount = incompleteCard.entryCount;
+                        if (currentStampCount + 1 >= STAMPS_PER_CARD) {
+                            completedCardIds.add(incompleteCard.id);
+                        }
                     } else {
                         newCardsToCreate.push({ userId });
                         currentStampCount = 0;
@@ -368,23 +370,23 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
                 if (stampEntriesToCreate.length > 0) {
                     await prisma.stampEntry.createMany({ data: stampEntriesToCreate });
                 }
+
+                for (const stampCardId of completedCardIds) {
+                    await ensureCouponForCompletedStampCard(prisma, { stampCardId });
+                }
             }
         }); // --- 트랜잭션 종료 (DB Commit) ---
 
 
         // 🚨 알림톡 비동기 발송 (성능/안정성 확보)
         for (const data of alimtalkData) {
-            sendAlimtalk(
-                AlimtalkType.STAMP_ACQUIRED,
-                data.phoneNumber,
-                {
-                    '고객명': data.name,
-                    '활동명': currentEventName,
-                    '현재개수': String(data.currentCount),
-                    '남은스탬프개수': String(STAMPS_PER_CARD - data.currentCount),
-                    'link': `${process.env.APP_URL}/card`
-                }
-            ).catch(err => {
+            sendStampProgressAlimtalk({
+                phoneNumber: data.phoneNumber,
+                customerName: data.name,
+                eventName: currentEventName,
+                currentCount: data.currentCount,
+                appUrl: process.env.APP_URL ?? new URL(request.url).origin,
+            }).catch(() => {
                 console.error(`[Alimtalk Error] Failed to send to ${data.name.slice(0, 1)}**(${data.phoneNumber.slice(-4)})`);
             });
         }
