@@ -5,11 +5,12 @@ import { useLoaderData, useFetcher } from "react-router";
 import { getSession } from "~/lib/auth.server";
 import { db } from "~/lib/db.server";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
+import { CouponTicket } from "~/components/coupon-ticket";
 import { StampSlot } from "~/components/stampSlot";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog";
 import { useState, useEffect } from "react";
 import { Badge } from "~/components/ui/badge";
-import { AwardIcon, Calendar, Gift, Star, Users } from "lucide-react";
+import { AwardIcon, Calendar, Star, Users } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { format } from "date-fns/format";
 import { Toaster } from "~/components/ui/sonner";
@@ -157,33 +158,15 @@ export default function MyStampCardPage() {
 
               <h2 className="text-xl font-bold text-gray-800 border-b pb-2 mb-4 mt-8">보유 쿠폰</h2>
               {availableCoupons.length > 0 ? (
-                <div className="space-y-6">
-                  {availableCoupons.map((coupon) => (
-                    <Card key={coupon.id} className="border-2 text-left border-[#81C784] bg-[#F0FDF4]">
-                      <CardHeader>
-                        <CardTitle className="text-xl text-[#66BB6A]">
-                          <Gift className="inline-block h-5 w-5 mr-2" />
-                          보유한 쿠폰
-                        </CardTitle>
-                        <CardDescription className="text-[#81C784]">
-                          {coupon.description}
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-2">
-                        <div className="flex justify-between items-center text-lg font-bold">
-                          <span className="text-gray-800">쿠폰 코드:</span>
-                          <span className="p-2 rounded-md tracking-wider bg-[#EEF7EF] text-[#66BB6A]">
-                            {coupon.code}
-                          </span>
-                        </div>
-                        <div className="flex justify-between items-center text-sm">
-                          <span className="text-muted-foreground">유효 기간:</span>
-                          <span>~ {format(new Date(coupon.expiresAt), "yyyy년 MM월 dd일")}</span>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
+                  <div className="space-y-5">
+                    {availableCoupons.map((coupon) => (
+                      <CouponTicket
+                        key={coupon.id}
+                        description={coupon.description}
+                        expiresAt={coupon.expiresAt}
+                      />
+                    ))}
+                  </div>
               ) : (
                 <p className="text-center text-muted-foreground py-10">보유한 쿠폰이 없습니다.</p>
               )}
@@ -226,30 +209,16 @@ export default function MyStampCardPage() {
 
               <h2 className="text-xl font-bold text-gray-800 border-b pb-2 mb-4 mt-8">사용한 쿠폰</h2>
               {usedCoupons.length > 0 ? (
-                <div className="space-y-6">
-                  {usedCoupons.map((coupon) => (
-                    <Card key={coupon.id} className="border-2 text-left border-gray-300 bg-gray-50">
-                      <CardHeader>
-                        <CardTitle className="text-xl text-gray-500">
-                          <Gift className="inline-block h-5 w-5 mr-2" />
-                          사용한 쿠폰
-                        </CardTitle>
-                        <CardDescription className="text-gray-400">
-                          {coupon.description}
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-2">
-                        <div className="flex justify-between items-center text-lg font-bold">
-                          <span className="text-gray-400">쿠폰 코드:</span>
-                          <span className="p-2 rounded-md tracking-wider bg-gray-200 text-gray-500 line-through">
-                            {coupon.code}
-                          </span>
-                        </div>
-                   
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
+                  <div className="space-y-5">
+                    {usedCoupons.map((coupon) => (
+                      <CouponTicket
+                        key={coupon.id}
+                        description={coupon.description}
+                        expiresAt={coupon.expiresAt}
+                        status="used"
+                      />
+                    ))}
+                  </div>
               ) : (
                 <p className="text-center text-muted-foreground py-10">사용한 쿠폰이 없습니다.</p>
               )}
