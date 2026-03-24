@@ -70,8 +70,7 @@ export async function sendAlimtalk<T extends AlimtalkType>(
 
   // --- 실제 서버 환경에서만 아래 로직 실행 ---
   if (!ALIMTALK_APPKEY || !ALIMTALK_SECRET_KEY || !ALIMTALK_SENDER_KEY) {
-    console.error("NHN Cloud 알림톡 연동에 필요한 환경 변수가 모두 설정되지 않았습니다.");
-    return;
+    throw new Error("알림톡 환경 변수가 설정되지 않아 발송할 수 없습니다.");
   }
 
   const requestBody = {
@@ -96,9 +95,23 @@ export async function sendAlimtalk<T extends AlimtalkType>(
     if (response.data?.header?.isSuccessful) {
       console.log(`알림톡 발송 성공: ${to}, 타입: ${AlimtalkType[type]}`);
     } else {
-      console.error(`알림톡 발송 실패 (Code: ${response.data?.header?.resultCode}): ${response.data?.header?.resultMessage}`);
+      const resultCode = response.data?.header?.resultCode ?? "UNKNOWN";
+      const resultMessage = response.data?.header?.resultMessage ?? "알 수 없는 오류";
+      throw new Error(`알림톡 발송 실패 (${resultCode}): ${resultMessage}`);
     }
   } catch (error) {
-    console.error("알림톡 API 요청 중 오류 발생:", error);
+    if (axios.isAxiosError(error)) {
+      const apiMessage =
+        error.response?.data?.header?.resultMessage ||
+        error.response?.data?.header?.errorMessage ||
+        error.message;
+      throw new Error(`알림톡 API 요청 실패: ${apiMessage}`);
+    }
+
+    if (error instanceof Error) {
+      throw error;
+    }
+
+    throw new Error("알림톡 API 요청 중 알 수 없는 오류가 발생했습니다.");
   }
 }

@@ -34,7 +34,7 @@ import { getSessionWithPermission } from "~/lib/auth.server";
 import { db } from "~/lib/db.server";
 import { commitSession, getFlashSession } from "~/lib/session.server";
 import { STAMPS_PER_CARD, ensureCouponForCompletedStampCard } from "~/lib/stamp-coupon.server";
-import { sendCouponIssuedAlimtalk } from "~/lib/stamp-notification.server";
+import { sendCouponIssuedAlimtalk, sendStampProgressAlimtalk } from "~/lib/stamp-notification.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   await getSessionWithPermission(request, "ADMIN");
@@ -262,7 +262,18 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       flashSession.flash("toast", { type: "error", message: "이벤트를 선택해 주세요." });
     } else {
       try {
-        await db.$transaction(async (prisma) => {
+        const stampNotification = await db.$transaction(async (prisma) => {
+          const [userRecord, eventRecord] = await Promise.all([
+            prisma.user.findUnique({
+              where: { id: userId },
+              select: { name: true, phoneNumber: true },
+            }),
+            prisma.event.findUnique({
+              where: { id: eventId },
+              select: { name: true },
+            }),
+          ]);
+
           let activeCard = await prisma.stampCard.findFirst({
             where: { userId, isRedeemed: false },
             include: { _count: { select: { entries: true } } },
@@ -296,7 +307,28 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
               userId,
             });
           }
+
+          if (userRecord?.phoneNumber && eventRecord?.name) {
+            return {
+              phoneNumber: userRecord.phoneNumber,
+              customerName: userRecord.name,
+              eventName: eventRecord.name,
+              currentCount: nextStampCount,
+            };
+          }
+
+          return null;
         });
+
+        if (stampNotification) {
+          await sendStampProgressAlimtalk({
+            phoneNumber: stampNotification.phoneNumber,
+            customerName: stampNotification.customerName,
+            eventName: stampNotification.eventName,
+            currentCount: stampNotification.currentCount,
+            appUrl: process.env.APP_URL ?? new URL(request.url).origin,
+          });
+        }
 
         flashSession.flash("toast", { type: "success", message: "스탬프가 성공적으로 적립되었습니다." });
       } catch (error) {
@@ -345,7 +377,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       flashSession.flash("toast", { type: "error", message: "관리자 메모를 입력해 주세요." });
     } else {
       try {
-        await db.$transaction(async (prisma) => {
+        const stampNotification = await db.$transaction(async (prisma) => {
+          const userRecord = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { name: true, phoneNumber: true },
+          });
+
           let activeCard = await prisma.stampCard.findFirst({
             where: { userId, isRedeemed: false },
             include: { _count: { select: { entries: true } } },
@@ -376,7 +413,28 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
               userId,
             });
           }
+
+          if (userRecord?.phoneNumber) {
+            return {
+              phoneNumber: userRecord.phoneNumber,
+              customerName: userRecord.name,
+              eventName: adminNote.trim() || "관리자 수기 적립",
+              currentCount: nextStampCount,
+            };
+          }
+
+          return null;
         });
+
+        if (stampNotification) {
+          await sendStampProgressAlimtalk({
+            phoneNumber: stampNotification.phoneNumber,
+            customerName: stampNotification.customerName,
+            eventName: stampNotification.eventName,
+            currentCount: stampNotification.currentCount,
+            appUrl: process.env.APP_URL ?? new URL(request.url).origin,
+          });
+        }
 
         flashSession.flash("toast", { type: "success", message: "관리자 수기 적립이 완료되었습니다." });
       } catch (error) {

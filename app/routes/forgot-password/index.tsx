@@ -28,9 +28,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   // 실제로는 SMS를 보내야 하지만, 여기서는 6자리 코드를 생성하여 세션에 저장합니다.
   const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-   await sendAlimtalk(AlimtalkType.PASSWORD_RESET, phoneNumber, {
-    "인증번호": verificationCode
-  }); // 개발용으로 콘솔에 출력
+  try {
+    await sendAlimtalk(AlimtalkType.PASSWORD_RESET, phoneNumber, {
+      "인증번호": verificationCode
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "알림톡 발송에 실패했습니다.";
+    flashSession.flash("toast", { type: "error", message });
+    return redirect("/forgot-password", {
+      headers: { "Set-Cookie": await commitSession(flashSession) },
+    });
+  }
 
   flashSession.set("verificationCode", verificationCode);
   flashSession.set("passwordResetCodeIssuedAt", Date.now());
