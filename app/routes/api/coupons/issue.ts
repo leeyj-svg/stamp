@@ -224,7 +224,10 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
       }
 
       console.error('쿠폰 알림톡 재발송 오류:', error);
-      return { success: false, error: '쿠폰 알림톡을 다시 보낼 수 없습니다.' };
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : '쿠폰 알림톡을 다시 보낼 수 없습니다.',
+      };
     }
   }
 

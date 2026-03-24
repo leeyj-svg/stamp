@@ -2,6 +2,14 @@
 
 import axios from 'axios';
 
+function normalizeAlimtalkPhoneNumber(raw: string): string {
+  return raw.replace(/\D/g, '').trim();
+}
+
+function isValidKoreanMobileNumber(phoneNumber: string): boolean {
+  return /^01\d{8,9}$/.test(phoneNumber);
+}
+
 // .env 파일에서 NHN Cloud 알림톡 관련 비밀 정보를 가져옵니다.
 const ALIMTALK_APPKEY = process.env.ALIMTALK_APPKEY;
 const ALIMTALK_SECRET_KEY = process.env.ALIMTALK_SECRET_KEY;
@@ -57,11 +65,20 @@ export async function sendAlimtalk<T extends AlimtalkType>(
   payload: AlimtalkPayloads[T]
 ) {
   const templateCode = getTemplateCode(type);
+  const normalizedTo = normalizeAlimtalkPhoneNumber(to);
+
+  if (!normalizedTo) {
+    throw new Error('알림톡 수신자 전화번호가 비어 있습니다.');
+  }
+
+  if (!isValidKoreanMobileNumber(normalizedTo)) {
+    throw new Error(`알림톡 수신자 전화번호 형식이 올바르지 않습니다: ${to}`);
+  }
 
   // 로컬 개발 환경에서는 콘솔에만 출력
   if (process.env.NODE_ENV === 'development') {
     console.log('--- [DEV MODE] KAKAO ALIMTALK (NHN Cloud) ---');
-    console.log(`To: ${to}`);
+    console.log(`To: ${normalizedTo}`);
     console.log(`Template Code: ${templateCode}`);
     console.log('Payload:', payload);
     console.log('-------------------------------------------');
@@ -78,7 +95,7 @@ export async function sendAlimtalk<T extends AlimtalkType>(
     templateCode: templateCode,
     recipientList: [
       {
-        recipientNo: to,
+        recipientNo: normalizedTo,
         templateParameter: payload, // 페이로드 객체를 그대로 전달
       },
     ],
@@ -93,11 +110,19 @@ export async function sendAlimtalk<T extends AlimtalkType>(
     });
 
     if (response.data?.header?.isSuccessful) {
-      console.log(`알림톡 발송 성공: ${to}, 타입: ${AlimtalkType[type]}`);
+      console.log(`알림톡 발송 성공: ${normalizedTo}, 타입: ${AlimtalkType[type]}`);
     } else {
       const resultCode = response.data?.header?.resultCode ?? "UNKNOWN";
       const resultMessage = response.data?.header?.resultMessage ?? "알 수 없는 오류";
-      throw new Error(`알림톡 발송 실패 (${resultCode}): ${resultMessage}`);
+      const recipientFailureDetail =
+        response.data?.body?.data?.failedList?.[0]?.resultMessage ||
+        response.data?.body?.data?.failResults?.[0]?.resultMessage ||
+        response.data?.body?.failedList?.[0]?.resultMessage ||
+        response.data?.body?.failResults?.[0]?.resultMessage ||
+        null;
+
+      const detailSuffix = recipientFailureDetail ? ` / 수신자 사유: ${recipientFailureDetail}` : '';
+      throw new Error(`알림톡 발송 실패 (${resultCode}): ${resultMessage}${detailSuffix}`);
     }
   } catch (error) {
     if (axios.isAxiosError(error)) {
