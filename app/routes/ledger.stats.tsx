@@ -57,9 +57,12 @@ type AmountBreakdownItem = {
 type TagBreakdownItem = {
   label: string;
   count: number;
-  percent: number;
   linkedAmount: number;
+  countPercent: number;
+  amountPercent: number;
 };
+
+type TagMetricValue = "COUNT" | "AMOUNT";
 
 type PaymentMethodDetailItem = {
   label: string;
@@ -1042,6 +1045,7 @@ export default function LedgerStatsPage() {
   const [categoryChartView, setCategoryChartView] = useState<CategoryChartViewValue>("DONUT");
   const [tagTypeTab, setTagTypeTab] = useState<LedgerEntryTypeValue>("EXPENSE");
   const [selectedTagCategoryIds, setSelectedTagCategoryIds] = useState<number[]>([]);
+  const [tagMetric, setTagMetric] = useState<TagMetricValue>("COUNT");
   const activeCategorySection = useMemo(() => {
     if (selectedFilter !== "ALL") {
       return categorySections[0] ?? null;
@@ -1084,7 +1088,7 @@ export default function LedgerStatsPage() {
       current.includes(categoryId) ? current.filter((id) => id !== categoryId) : [...current, categoryId],
     );
   };
-  const tagStats = useMemo(() => {
+  const rawTagStats = useMemo(() => {
     const grouped = new Map<string, { count: number; linkedAmount: number }>();
 
     for (const entry of tagEntries) {
@@ -1096,17 +1100,30 @@ export default function LedgerStatsPage() {
       }
     }
 
-    const totalCount = Array.from(grouped.values()).reduce((sum, item) => sum + item.count, 0);
-
     return Array.from(grouped.entries())
       .map(([label, value]) => ({
         label,
         count: value.count,
         linkedAmount: value.linkedAmount,
-        percent: roundPercent(value.count, totalCount),
       }))
       .sort((left, right) => right.count - left.count || right.linkedAmount - left.linkedAmount);
   }, [tagEntries]);
+  const tagStats = useMemo(() => {
+    const totalCount = rawTagStats.reduce((sum, item) => sum + item.count, 0);
+    const totalAmount = rawTagStats.reduce((sum, item) => sum + item.linkedAmount, 0);
+
+    return rawTagStats
+      .map((item) => ({
+        ...item,
+        countPercent: roundPercent(item.count, totalCount),
+        amountPercent: roundPercent(item.linkedAmount, totalAmount),
+      }))
+      .sort((left, right) =>
+        tagMetric === "AMOUNT"
+          ? right.linkedAmount - left.linkedAmount || right.count - left.count
+          : right.count - left.count || right.linkedAmount - left.linkedAmount,
+      );
+  }, [rawTagStats, tagMetric]);
   const categoryBudgetSections = useMemo(() => {
     const totalsByType = new Map<LedgerEntryTypeValue, Map<number, CategoryBudgetUsageItem>>();
 
@@ -1702,6 +1719,28 @@ export default function LedgerStatsPage() {
                   })}
                 </div>
               ) : null}
+              <div className="mb-3 grid grid-cols-2 rounded-xl bg-slate-100 p-1">
+                {([
+                  { value: "COUNT", label: "건수" },
+                  { value: "AMOUNT", label: "금액" },
+                ] as const).map((option) => {
+                  const isActive = tagMetric === option.value;
+
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={cn(
+                        "rounded-lg px-2 py-1.5 text-[0.74rem] font-medium transition-colors",
+                        isActive ? "bg-white text-slate-900 shadow-sm" : "text-slate-500",
+                      )}
+                      onClick={() => setTagMetric(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
               {tagCategoryOptions.length > 0 ? (
                 <div className="mb-3 flex flex-wrap gap-1.5">
                   <button
@@ -1739,6 +1778,7 @@ export default function LedgerStatsPage() {
               ) : null}
               <TagStatList
                 items={tagStats}
+                metric={tagMetric}
                 emptyMessage={
                   effectiveSelectedTagCategoryIds.length > 0
                     ? "선택한 카테고리에는 아직 태그가 달린 내역이 없습니다."
@@ -2071,7 +2111,15 @@ function PaymentMethodDetailList({
   );
 }
 
-function TagStatList({ items, emptyMessage }: { items: TagBreakdownItem[]; emptyMessage: string }) {
+function TagStatList({
+  items,
+  metric,
+  emptyMessage,
+}: {
+  items: TagBreakdownItem[];
+  metric: TagMetricValue;
+  emptyMessage: string;
+}) {
   if (items.length === 0) {
     return <EmptyState message={emptyMessage} />;
   }
@@ -2083,15 +2131,28 @@ function TagStatList({ items, emptyMessage }: { items: TagBreakdownItem[]; empty
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="truncate text-[0.82rem] font-medium text-slate-800">{item.label}</p>
-              <p className="mt-1 text-[0.72rem] text-slate-400">연결 금액 {formatLedgerAmount(item.linkedAmount)}</p>
+              <p className="mt-1 text-[0.72rem] text-slate-400">
+                {metric === "COUNT"
+                  ? `연결 금액 ${formatLedgerAmount(item.linkedAmount)}`
+                  : `사용 건수 ${item.count}건`}
+              </p>
             </div>
             <div className="shrink-0 text-right">
-              <p className="text-[0.82rem] font-semibold text-slate-900">{item.count}건</p>
-              <p className="text-[0.72rem] text-slate-400">{item.percent}%</p>
+              <p className="text-[0.82rem] font-semibold text-slate-900">
+                {metric === "COUNT" ? `${item.count}건` : formatLedgerAmount(item.linkedAmount)}
+              </p>
+              <p className="text-[0.72rem] text-slate-400">
+                {metric === "COUNT" ? item.countPercent : item.amountPercent}%
+              </p>
             </div>
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-            <div className="h-full rounded-full bg-emerald-500" style={{ width: `${getAmountBarWidth(item.percent)}%` }} />
+            <div
+              className="h-full rounded-full bg-emerald-500"
+              style={{
+                width: `${getAmountBarWidth(metric === "COUNT" ? item.countPercent : item.amountPercent)}%`,
+              }}
+            />
           </div>
         </div>
       ))}

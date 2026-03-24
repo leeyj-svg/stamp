@@ -2,6 +2,7 @@ import { format } from "date-fns";
 
 import { AlimtalkType, sendAlimtalk } from "~/lib/alimtalk.server";
 import {
+  getAlimtalkCouponDescription,
   STAMPS_PER_CARD,
   getStampCouponDescription,
   getStampCouponExpiresAt,
@@ -18,7 +19,7 @@ export async function sendCouponIssuedAlimtalk(params: {
 
   await sendAlimtalk(AlimtalkType.COUPON_ISSUED, phoneNumber, {
     고객명: customerName,
-    쿠폰설명: description ?? getStampCouponDescription(),
+    쿠폰설명: getAlimtalkCouponDescription(description),
     만료일자: format(expiresAt ?? getStampCouponExpiresAt(), "yyyy-MM-dd"),
     link: `${appUrl}/card`,
   });
