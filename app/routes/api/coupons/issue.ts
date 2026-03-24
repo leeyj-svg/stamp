@@ -5,6 +5,7 @@ import { customAlphabet } from 'nanoid';
 import { db } from '~/lib/db.server';
 import { getSession, getSessionWithPermission } from '~/lib/auth.server';
 import { sendCouponIssuedAlimtalk } from '~/lib/stamp-notification.server';
+import { getStampCouponDescription } from '~/lib/stamp-coupon.server';
 
 const STAMPS_PER_CARD = 10;
 const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 12);
@@ -91,7 +92,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
         const coupon = await prisma.coupon.create({
           data: {
             code: generateCouponCode(),
-            description: `${new Date().getFullYear()}년 스탬프 이벤트 보상`,
+            description: getStampCouponDescription(),
             expiresAt,
             stampCardId: stampCard.id,
           },

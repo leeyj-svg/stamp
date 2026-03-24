@@ -3,7 +3,24 @@ import { Prisma } from "@prisma/client";
 export const STAMPS_PER_CARD = 10;
 
 export function getStampCouponDescription(referenceDate = new Date()) {
-  return `${referenceDate.getFullYear()}년 스탬프 이벤트 보상`;
+  void referenceDate;
+  return "스탬프쿠폰";
+}
+
+export function getAlimtalkCouponDescription(description?: string | null) {
+  const normalized = (description ?? getStampCouponDescription())
+    .replace(/\s+/g, "")
+    .trim();
+
+  if (!normalized) {
+    return getStampCouponDescription();
+  }
+
+  if (normalized.length <= 15) {
+    return normalized;
+  }
+
+  return getStampCouponDescription();
 }
 
 export function getStampCouponExpiresAt(referenceDate = new Date()) {
