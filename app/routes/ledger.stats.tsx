@@ -25,7 +25,7 @@ import {
   getBudgetPeriodDayCount,
   getFixedExpenseCategoryIds,
 } from "~/lib/ledger-budget";
-import { ensureLedgerSetup, getMonthToken, shiftMonthToken } from "~/lib/ledger";
+import { ensureLedgerSetup, getLedgerReferenceDateForMonthToken, getMonthToken, shiftMonthToken } from "~/lib/ledger";
 import { cn } from "~/lib/utils";
 
 type EntryFilterValue = "ALL" | LedgerEntryTypeValue;
@@ -151,19 +151,6 @@ function getMonthLabel(date: Date) {
     year: "numeric",
     month: "long",
   }).format(date);
-}
-
-function getStatsReferenceDate(monthStart: Date, periodBasis: LedgerPeriodBasis, paydayDay: number | null | undefined) {
-  if (periodBasis !== "PAYDAY") {
-    return monthStart;
-  }
-
-  const safePayday = Math.min(
-    Math.max(paydayDay ?? 25, 1),
-    new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate(),
-  );
-
-  return new Date(monthStart.getFullYear(), monthStart.getMonth(), safePayday, 12, 0, 0, 0);
 }
 
 function buildLedgerStatsLink(monthToken: string, filter: EntryFilterValue) {
@@ -383,6 +370,22 @@ function getTypeStatMeta(type: LedgerEntryTypeValue) {
   };
 }
 
+function getTagChipClass(type: LedgerEntryTypeValue, selected: boolean) {
+  if (!selected) {
+    return "border-slate-200 bg-white text-slate-500 hover:bg-slate-50";
+  }
+
+  if (type === "INCOME") {
+    return "border-sky-300 bg-sky-50 text-sky-600";
+  }
+
+  if (type === "EXPENSE") {
+    return "border-rose-300 bg-rose-50 text-rose-500";
+  }
+
+  return "border-emerald-300 bg-emerald-50 text-emerald-600";
+}
+
 function formatSignedPercent(value: number) {
   return `${value > 0 ? "+" : ""}${value}%`;
 }
@@ -515,10 +518,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 
   const initialBudgetResult = await ensureLedgerBudgetPeriodForDate(db, user.id, monthStart);
-  const statsReferenceDate = getStatsReferenceDate(
-    monthStart,
+  const statsReferenceDate = getLedgerReferenceDateForMonthToken(
+    monthToken,
     initialBudgetResult.settings.defaultPeriodBasis as LedgerPeriodBasis,
-    initialBudgetResult.settings.paydayDay,
+    initialBudgetResult.settings.paydayDay ?? 25,
   );
   const currentBudgetResult =
     statsReferenceDate.getTime() === monthStart.getTime()
@@ -1724,6 +1727,12 @@ export default function LedgerStatsPage() {
                 <div className="mb-3 grid grid-cols-3 rounded-xl bg-slate-100 p-1">
                   {(["INCOME", "EXPENSE", "SAVING"] as const).map((type) => {
                     const isActive = tagFocusType === type;
+                    const activeClassName =
+                      type === "INCOME"
+                        ? "bg-white text-sky-600 shadow-sm"
+                        : type === "EXPENSE"
+                          ? "bg-white text-rose-500 shadow-sm"
+                          : "bg-white text-emerald-600 shadow-sm";
 
                     return (
                       <button
@@ -1731,7 +1740,7 @@ export default function LedgerStatsPage() {
                         type="button"
                         className={cn(
                           "rounded-lg px-2 py-1.5 text-[0.74rem] font-medium transition-colors",
-                          isActive ? "bg-white text-slate-900 shadow-sm" : "text-slate-500",
+                          isActive ? activeClassName : "text-slate-500",
                         )}
                         onClick={() => setTagTypeTab(type)}
                       >
@@ -1769,9 +1778,7 @@ export default function LedgerStatsPage() {
                     type="button"
                     className={cn(
                       "inline-flex items-center rounded-full border px-2.5 py-1 text-[0.68rem] font-medium transition-colors",
-                      effectiveSelectedTagCategoryIds.length === 0
-                        ? "border-slate-300 bg-slate-100 text-slate-700"
-                        : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+                      getTagChipClass(tagFocusType, effectiveSelectedTagCategoryIds.length === 0),
                     )}
                     onClick={() => setSelectedTagCategoryIds([])}
                   >
@@ -1786,9 +1793,7 @@ export default function LedgerStatsPage() {
                         type="button"
                         className={cn(
                           "inline-flex items-center rounded-full border px-2.5 py-1 text-[0.68rem] font-medium transition-colors",
-                          isSelected
-                            ? "border-slate-300 bg-slate-100 text-slate-700"
-                            : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+                          getTagChipClass(tagFocusType, isSelected),
                         )}
                         onClick={() => toggleTagCategoryFilter(category.id)}
                       >
@@ -1801,6 +1806,7 @@ export default function LedgerStatsPage() {
               <TagStatList
                 items={tagStats}
                 metric={tagMetric}
+                type={tagFocusType}
                 emptyMessage={
                   effectiveSelectedTagCategoryIds.length > 0
                     ? "선택한 카테고리에는 아직 태그가 달린 내역이 없습니다."
@@ -2136,15 +2142,19 @@ function PaymentMethodDetailList({
 function TagStatList({
   items,
   metric,
+  type,
   emptyMessage,
 }: {
   items: TagBreakdownItem[];
   metric: TagMetricValue;
+  type: LedgerEntryTypeValue;
   emptyMessage: string;
 }) {
   if (items.length === 0) {
     return <EmptyState message={emptyMessage} />;
   }
+
+  const meta = getTypeStatMeta(type);
 
   return (
     <div className="space-y-3">
@@ -2160,7 +2170,7 @@ function TagStatList({
               </p>
             </div>
             <div className="shrink-0 text-right">
-              <p className="text-[0.82rem] font-semibold text-slate-900">
+              <p className={cn("text-[0.82rem] font-semibold", meta.labelClass)}>
                 {metric === "COUNT" ? `${item.count}건` : formatLedgerAmount(item.linkedAmount)}
               </p>
               <p className="text-[0.72rem] text-slate-400">
@@ -2170,7 +2180,7 @@ function TagStatList({
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-slate-100">
             <div
-              className="h-full rounded-full bg-emerald-500"
+              className={cn("h-full rounded-full", meta.barClassName)}
               style={{
                 width: `${getAmountBarWidth(metric === "COUNT" ? item.countPercent : item.amountPercent)}%`,
               }}

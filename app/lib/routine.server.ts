@@ -1,6 +1,7 @@
 ﻿import { Prisma, type PrismaClient } from "@prisma/client";
 import * as z from "zod";
 
+import { combineRoutineDateAndTime } from "~/lib/routine";
 import { deleteImage, processAndUploadImage } from "~/lib/upload.server";
 
 type RoutineDbClient = PrismaClient | Prisma.TransactionClient;
@@ -92,27 +93,6 @@ function getNextDayStart(referenceDate: Date) {
   return new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate() + 1, 0, 0, 0, 0);
 }
 
-function combineDateAndTime(referenceDate: Date, timeValue?: string) {
-  if (!timeValue) {
-    return null;
-  }
-
-  const [hour, minute] = timeValue.split(":").map(Number);
-  if (!Number.isInteger(hour) || !Number.isInteger(minute)) {
-    return null;
-  }
-
-  return new Date(
-    referenceDate.getFullYear(),
-    referenceDate.getMonth(),
-    referenceDate.getDate(),
-    hour,
-    minute,
-    0,
-    0,
-  );
-}
-
 function isFileLike(value: FormDataEntryValue | null): value is File {
   return typeof File !== "undefined" && value instanceof File && value.size > 0;
 }
@@ -137,17 +117,6 @@ async function resolveRoutineImage(fileValue: FormDataEntryValue | null, current
   }
 
   return currentUrl;
-}
-
-export function formatRoutineTimeValue(value: string | null) {
-  if (!value) {
-    return "";
-  }
-
-  const performedAt = new Date(value);
-  const hours = String(performedAt.getHours()).padStart(2, "0");
-  const minutes = String(performedAt.getMinutes()).padStart(2, "0");
-  return `${hours}:${minutes}`;
 }
 
 export function getRoutineStatusLabel(status: RoutineRecordStatusValue) {
@@ -423,7 +392,7 @@ export async function saveRoutineRecord(db: RoutineDbClient, userId: string, ref
 
   const nextPhotoUrl1 = await resolveRoutineImage(formData.get("photo1"), existingRecord?.photoUrl1 ?? null, parsed.data.removePhoto1);
   const nextPhotoUrl2 = await resolveRoutineImage(formData.get("photo2"), existingRecord?.photoUrl2 ?? null, parsed.data.removePhoto2);
-  const performedAt = combineDateAndTime(referenceDate, parsed.data.performedTime);
+  const performedAt = combineRoutineDateAndTime(referenceDate, parsed.data.performedTime);
   const memo = parsed.data.memo?.trim() || null;
 
   if (existingRecord) {
