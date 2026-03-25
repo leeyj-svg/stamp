@@ -14,6 +14,7 @@ import {
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
 import { Textarea } from "~/components/ui/textarea";
+import { formatRoutineTimeValue } from "~/lib/routine";
 import { cn } from "~/lib/utils";
 
 type RoutineRecordStatusValue = "SUCCESS" | "FAIL" | "SKIPPED";
@@ -76,17 +77,6 @@ const ROUTINE_STATUS_OPTIONS: Array<{
     selectedClassName: "peer-checked:border-slate-300 peer-checked:bg-slate-100 peer-checked:text-slate-700",
   },
 ];
-
-function formatRoutineTimeValue(value: string | null) {
-  if (!value) {
-    return "";
-  }
-
-  const performedAt = new Date(value);
-  const hours = String(performedAt.getHours()).padStart(2, "0");
-  const minutes = String(performedAt.getMinutes()).padStart(2, "0");
-  return `${hours}:${minutes}`;
-}
 
 function getStatusLabel(status: RoutineRecordStatusValue) {
   if (status === "SUCCESS") return "성공";

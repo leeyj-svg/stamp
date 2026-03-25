@@ -483,7 +483,7 @@ export default function LedgerDatePage() {
 
   const summary = useMemo(
     () =>
-      filteredEntries.reduce(
+      entries.reduce(
         (acc, entry) => {
           if (entry.type === "INCOME") acc.income += entry.amount;
           if (entry.type === "EXPENSE") acc.expense += entry.amount;
@@ -492,7 +492,7 @@ export default function LedgerDatePage() {
         },
         { income: 0, expense: 0, saving: 0 },
       ),
-    [filteredEntries],
+    [entries],
   );
 
   const resultAmount = useMemo(() => {

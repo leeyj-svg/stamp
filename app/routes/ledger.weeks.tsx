@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
 import { getSessionWithPermission } from "~/lib/auth.server";
-import { getBudgetDisplayTotalAmount, getBudgetPeriodDayCount } from "~/lib/ledger-budget";
+import { getBudgetDisplayTotalAmount, getBudgetPeriodDayCount, getFixedExpenseCategoryIds } from "~/lib/ledger-budget";
 import { ensureLedgerBudgetPeriodForDate, getCurrentLedgerWeekBudgetSummary } from "~/lib/ledger-budget.server";
 import { db } from "~/lib/db.server";
 import {
@@ -42,7 +42,7 @@ import {
   getPaymentMethodLabel,
   type LedgerEntryTypeValue,
 } from "~/lib/ledger-entry";
-import { ensureLedgerSetup, getMonthToken, shiftMonthToken } from "~/lib/ledger";
+import { ensureLedgerSetup, getLedgerReferenceDateForMonthToken, getMonthToken, shiftMonthToken } from "~/lib/ledger";
 import { cn } from "~/lib/utils";
 
 type WeekPanelView = "ledger" | "routine";
@@ -139,13 +139,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     loadLedgerCategories(db, user.id),
   ]);
 
-  const periodBasis = startBudgetResult.settings.defaultPeriodBasis;
-  const displayRangeStart = periodBasis === "PAYDAY" ? new Date(startBudgetResult.period.periodStartAt) : monthStart;
-  const displayRangeEnd = periodBasis === "PAYDAY" ? new Date(startBudgetResult.period.periodEndAt) : nextMonthStart;
+  const periodReferenceDate = getLedgerReferenceDateForMonthToken(
+    monthToken,
+    startBudgetResult.settings.defaultPeriodBasis,
+    startBudgetResult.settings.paydayDay ?? 25,
+  );
+  const referenceBudgetResult =
+    periodReferenceDate.getTime() === monthStart.getTime()
+      ? startBudgetResult
+      : await ensureLedgerBudgetPeriodForDate(db, user.id, periodReferenceDate);
+  const periodBasis = referenceBudgetResult.settings.defaultPeriodBasis;
+  const displayRangeStart = periodBasis === "PAYDAY" ? new Date(referenceBudgetResult.period.periodStartAt) : monthStart;
+  const displayRangeEnd = periodBasis === "PAYDAY" ? new Date(referenceBudgetResult.period.periodEndAt) : nextMonthStart;
   const displayRangeLabel = formatFullPeriodLabel(displayRangeStart, displayRangeEnd);
 
   const budgetPeriodsById = new Map<number, LedgerListBudgetPeriodSummary>();
-  for (const period of periodBasis === "PAYDAY" ? [startBudgetResult.period] : [startBudgetResult.period, endBudgetResult.period]) {
+  for (const period of periodBasis === "PAYDAY" ? [referenceBudgetResult.period] : [startBudgetResult.period, endBudgetResult.period]) {
     budgetPeriodsById.set(period.id, {
       id: period.id,
       periodStartAt: period.periodStartAt.toISOString(),
@@ -243,7 +252,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     displayParam,
     budgetFocusType,
     periodBasis,
-    weekStartDay: startBudgetResult.settings.weekStartDay,
+    weekStartDay: referenceBudgetResult.settings.weekStartDay,
     displayRangeStartAt: displayRangeStart.toISOString(),
     displayRangeEndAt: displayRangeEnd.toISOString(),
     currentWeekBudget: currentWeekBudget
@@ -340,7 +349,7 @@ export default function LedgerWeeksPage() {
 
   const summary = useMemo(
     () =>
-      filteredEntries.reduce(
+      periodEntries.reduce(
         (acc, entry) => {
           if (entry.type === "INCOME") acc.income += entry.amount;
           if (entry.type === "EXPENSE") acc.expense += entry.amount;
@@ -349,7 +358,7 @@ export default function LedgerWeeksPage() {
         },
         { income: 0, expense: 0, saving: 0 },
       ),
-    [filteredEntries],
+    [periodEntries],
   );
   const monthlyGoalSummary =
     selectedFilter !== "ALL" && selectedCategoryIds.length === 0
@@ -370,13 +379,21 @@ export default function LedgerWeeksPage() {
               return sum;
             }
 
-            const totalAmount = getBudgetDisplayTotalAmount(selectedFilter, plan.totalAmount, plan.allocations);
+            const totalAmount =
+              selectedFilter === "EXPENSE"
+                ? plan.totalAmount
+                : getBudgetDisplayTotalAmount(selectedFilter, plan.totalAmount, plan.allocations);
             const overlapRatio = overlapDays / Math.max(getBudgetPeriodDayCount(period), 1);
             return sum + totalAmount * overlapRatio;
           }, 0);
 
-          const actualAmount =
-            selectedFilter === "INCOME" ? summary.income : selectedFilter === "EXPENSE" ? summary.expense : summary.saving;
+          const actualAmount = periodEntries.reduce((sum, entry) => {
+            if (entry.type !== selectedFilter) {
+              return sum;
+            }
+
+            return sum + entry.amount;
+          }, 0);
           return {
             actualAmount,
             remainingAmount: Math.round((monthTargetAmount - actualAmount) * 100) / 100,
@@ -443,6 +460,48 @@ export default function LedgerWeeksPage() {
 
         const weekBudget = findWeeklyBudgetStateForRange(range, weeklyBudgetStateByDate);
         const typeTotalAmount = rangeEntries.reduce((sum, entry) => sum + entry.amount, 0);
+        const fixedExpenseAmount =
+          selectedFilter === "EXPENSE" && selectedCategoryIds.length === 0
+            ? (() => {
+                const fixedExpenseCategoryIds = new Set<number>();
+
+                for (const period of budgetPeriods) {
+                  const periodStartAt = new Date(period.periodStartAt);
+                  const periodEndAt = new Date(period.periodEndAt);
+                  if (periodStartAt >= range.end || periodEndAt <= range.start) {
+                    continue;
+                  }
+
+                  const expensePlan = period.plans.find((item) => item.type === "EXPENSE");
+                  if (!expensePlan) {
+                    continue;
+                  }
+
+                  for (const categoryId of getFixedExpenseCategoryIds(expensePlan.allocations)) {
+                    fixedExpenseCategoryIds.add(categoryId);
+                  }
+                }
+
+                if (fixedExpenseCategoryIds.size === 0) {
+                  return 0;
+                }
+
+                return periodEntries.reduce((sum, entry) => {
+                  const usedAt = new Date(entry.usedAt);
+                  if (
+                    entry.type !== "EXPENSE" ||
+                    entry.categoryId === null ||
+                    !fixedExpenseCategoryIds.has(entry.categoryId) ||
+                    usedAt < range.start ||
+                    usedAt >= range.end
+                  ) {
+                    return sum;
+                  }
+
+                  return sum + entry.amount;
+                }, 0);
+              })()
+            : 0;
         const periodRemainingBudget =
           selectedFilter !== "ALL" && selectedFilter !== "EXPENSE" && selectedCategoryIds.length === 0
             ? buildPeriodRemainingBudgetUntilDate({
@@ -456,7 +515,7 @@ export default function LedgerWeeksPage() {
           selectedFilter !== "ALL" && selectedCategoryIds.length === 0
             ? selectedFilter === "EXPENSE"
               ? weekBudget
-                ? Math.round((weekBudget.target - typeTotalAmount) * 100) / 100
+                ? weekBudget.value
                 : null
               : periodRemainingBudget
                 ? periodRemainingBudget.remainingAmount
@@ -478,6 +537,7 @@ export default function LedgerWeeksPage() {
           })),
           typeTotalAmount,
           typeResultAmount,
+          fixedExpenseAmount,
           weekBudget,
           isCurrentWeek,
         };
@@ -490,6 +550,7 @@ export default function LedgerWeeksPage() {
     displayRangeEnd,
     displayRangeStart,
     filteredEntries,
+    periodEntries,
     selectedCategoryIds.length,
     selectedFilter,
     showCurrentWeekBudget,
@@ -715,18 +776,46 @@ export default function LedgerWeeksPage() {
               </div>
             ) : null}
 
-            {monthlyGoalSummary ? (
-              <div className="border-b bg-white px-4 py-2.5">
-                <div className="flex items-center justify-end gap-3">
-                  <p className={cn("text-[0.82rem] font-semibold", getAmountClass(selectedFilter as LedgerEntryTypeValue))}>
-                    {formatLedgerAmount(monthlyGoalSummary.actualAmount)}
-                  </p>
-                  <p className={cn("text-[0.68rem] font-medium", getBudgetResultClass(selectedFilter as LedgerEntryTypeValue, monthlyGoalSummary.remainingAmount))}>
-                    {monthlyGoalSummary.remainingLabel} {formatLedgerAmount(monthlyGoalSummary.remainingAmount)}
-                  </p>
-                </div>
-              </div>
-            ) : null}
+             {monthlyGoalSummary ? (
+               <div className="border-b bg-white px-4 py-2.5">
+                 <div className="flex items-center justify-end gap-3">
+                   {selectedFilter === "EXPENSE" ? (
+                     <div className="text-right">
+                       <p
+                         className={cn(
+                           "inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-[0.68rem] font-medium",
+                           getBudgetResultClass(selectedFilter as LedgerEntryTypeValue, monthlyGoalSummary.remainingAmount),
+                         )}
+                       >
+                         총 남은 예산 {formatLedgerAmount(monthlyGoalSummary.remainingAmount)}
+                       </p>
+                       <p className="mt-0.5 text-[0.62rem] font-medium text-rose-400">
+                         총지출 {formatLedgerAmount(monthlyGoalSummary.actualAmount)}
+                       </p>
+                     </div>
+                   ) : (
+                     <div className="text-right">
+                       <p
+                         className={cn(
+                           "text-[0.68rem] font-medium",
+                           getBudgetResultClass(selectedFilter as LedgerEntryTypeValue, monthlyGoalSummary.remainingAmount),
+                         )}
+                       >
+                         {monthlyGoalSummary.remainingLabel} {formatLedgerAmount(monthlyGoalSummary.remainingAmount)}
+                       </p>
+                       <p
+                         className={cn(
+                           "mt-0.5 text-[0.62rem] font-medium",
+                           getAmountClass(selectedFilter as LedgerEntryTypeValue),
+                         )}
+                       >
+                         총금액 {formatLedgerAmount(monthlyGoalSummary.actualAmount)}
+                       </p>
+                     </div>
+                   )}
+                 </div>
+               </div>
+             ) : null}
 
             <div className="pb-20">
               {weekGroups.length === 0 ? (
@@ -742,9 +831,16 @@ export default function LedgerWeeksPage() {
                             {formatLedgerAmount(group.typeTotalAmount)}
                           </p>
                           {selectedFilter === "EXPENSE" && group.typeResultAmount !== null ? (
-                            <p className={cn("mt-0.5 text-[0.64rem] font-medium", getBudgetResultClass(selectedFilter, group.typeResultAmount))}>
-                              남은 예산 {formatLedgerAmount(group.typeResultAmount)}
-                            </p>
+                            <div className="mt-0.5 text-[0.64rem] font-medium">
+                              <p className={cn(getBudgetResultClass(selectedFilter, group.typeResultAmount))}>
+                                남은 운영 예산 {formatLedgerAmount(group.typeResultAmount)}
+                              </p>
+                              {group.fixedExpenseAmount > 0 ? (
+                                <p className="mt-0.5 text-[0.6rem] font-medium text-slate-300">
+                                  고정지출 {formatLedgerAmount(group.fixedExpenseAmount)}
+                                </p>
+                              ) : null}
+                            </div>
                           ) : null}
                         </div>
                       ) : group.weekBudget ? (
