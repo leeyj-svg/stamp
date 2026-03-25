@@ -153,6 +153,19 @@ function getMonthLabel(date: Date) {
   }).format(date);
 }
 
+function getStatsReferenceDate(monthStart: Date, periodBasis: LedgerPeriodBasis, paydayDay: number | null | undefined) {
+  if (periodBasis !== "PAYDAY") {
+    return monthStart;
+  }
+
+  const safePayday = Math.min(
+    Math.max(paydayDay ?? 25, 1),
+    new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate(),
+  );
+
+  return new Date(monthStart.getFullYear(), monthStart.getMonth(), safePayday, 12, 0, 0, 0);
+}
+
 function buildLedgerStatsLink(monthToken: string, filter: EntryFilterValue) {
   const params = new URLSearchParams({ month: monthToken });
   if (filter !== "ALL") {
@@ -501,7 +514,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     tagNames: entry.tags.map((item) => item.tag.name),
   });
 
-  const currentBudgetResult = await ensureLedgerBudgetPeriodForDate(db, user.id, monthStart);
+  const initialBudgetResult = await ensureLedgerBudgetPeriodForDate(db, user.id, monthStart);
+  const statsReferenceDate = getStatsReferenceDate(
+    monthStart,
+    initialBudgetResult.settings.defaultPeriodBasis as LedgerPeriodBasis,
+    initialBudgetResult.settings.paydayDay,
+  );
+  const currentBudgetResult =
+    statsReferenceDate.getTime() === monthStart.getTime()
+      ? initialBudgetResult
+      : await ensureLedgerBudgetPeriodForDate(db, user.id, statsReferenceDate);
   const currentPeriodStart = new Date(currentBudgetResult.period.periodStartAt);
   const currentPeriodEnd = new Date(currentBudgetResult.period.periodEndAt);
   const previousPeriodReference = new Date(currentPeriodStart);

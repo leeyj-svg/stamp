@@ -3,6 +3,7 @@ import { Link, redirect, useLoaderData, useNavigation, type ActionFunctionArgs, 
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
+import { CouponTicket } from "~/components/coupon-ticket";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
@@ -363,7 +364,7 @@ export default function MyPage() {
                     <div key={card.id} className="rounded-md border p-2 text-sm">
                       <p className="font-medium">카드 #{card.id}</p>
                       <p className="text-xs text-muted-foreground">
-                        {card.coupon ? `쿠폰: ${card.coupon.code}` : "쿠폰 없음"}
+                        {card.coupon ? card.coupon.description : "쿠폰 없음"}
                       </p>
                     </div>
                   ))
@@ -379,35 +380,38 @@ export default function MyPage() {
                 보유 {stats.availableCoupons}개 · 사용 {stats.usedCoupons}개
               </CardDescription>
             </CardHeader>
-            <CardContent className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-2">
-                <p className="text-sm font-semibold">보유 쿠폰</p>
-                {availableCoupons.length === 0 ? (
-                  <p className="rounded-md border p-2 text-sm text-muted-foreground">보유 쿠폰이 없습니다.</p>
-                ) : (
-                  availableCoupons.map((coupon) => (
-                    <div key={coupon.id} className="rounded-md border p-2 text-sm">
-                      <p className="font-medium">{coupon.description}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {coupon.code} · 만료 {new Date(coupon.expiresAt).toLocaleDateString()}
-                      </p>
-                    </div>
-                  ))
-                )}
-              </div>
-              <div className="space-y-2">
-                <p className="text-sm font-semibold">사용 쿠폰</p>
-                {usedCoupons.length === 0 ? (
-                  <p className="rounded-md border p-2 text-sm text-muted-foreground">사용 쿠폰이 없습니다.</p>
-                ) : (
-                  usedCoupons.map((coupon) => (
-                    <div key={coupon.id} className="rounded-md border p-2 text-sm">
-                      <p className="font-medium">{coupon.description}</p>
-                      <p className="text-xs text-muted-foreground">{coupon.code}</p>
-                    </div>
-                  ))
-                )}
-              </div>
+              <CardContent className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold">보유 쿠폰</p>
+                  {availableCoupons.length === 0 ? (
+                    <p className="rounded-md border p-2 text-sm text-muted-foreground">보유 쿠폰이 없습니다.</p>
+                  ) : (
+                    availableCoupons.map((coupon) => (
+                      <CouponTicket
+                        key={coupon.id}
+                        description={coupon.description}
+                        expiresAt={coupon.expiresAt}
+                        compact
+                      />
+                    ))
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold">사용 쿠폰</p>
+                  {usedCoupons.length === 0 ? (
+                    <p className="rounded-md border p-2 text-sm text-muted-foreground">사용 쿠폰이 없습니다.</p>
+                  ) : (
+                    usedCoupons.map((coupon) => (
+                      <CouponTicket
+                        key={coupon.id}
+                        description={coupon.description}
+                        expiresAt={coupon.expiresAt}
+                        status="used"
+                        compact
+                      />
+                    ))
+                  )}
+                </div>
             </CardContent>
           </Card>
         </TabsContent>
