@@ -103,6 +103,7 @@ function RoutinePhotoField({ label, inputName, removeName, currentUrl }: Routine
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [blobPreviewUrl, setBlobPreviewUrl] = useState<string | null>(null);
   const [markedForRemoval, setMarkedForRemoval] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   useEffect(() => {
     setMarkedForRemoval(false);
@@ -155,6 +156,10 @@ function RoutinePhotoField({ label, inputName, removeName, currentUrl }: Routine
     }
   }
 
+  function openFilePicker() {
+    inputRef.current?.click();
+  }
+
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
@@ -165,25 +170,53 @@ function RoutinePhotoField({ label, inputName, removeName, currentUrl }: Routine
             className="text-[10px] text-slate-400 transition-colors hover:text-rose-400"
             onClick={handleRemove}
           >
-            지우기
+            {"\uC9C0\uC6B0\uAE30"}
           </button>
         ) : null}
       </div>
       <input type="hidden" name={removeName} value={markedForRemoval ? "1" : "0"} />
-      <label className="group relative flex h-28 cursor-pointer overflow-hidden rounded-2xl border border-dashed border-slate-300 bg-white">
+      <div className="group relative flex h-28 overflow-hidden rounded-2xl border border-dashed border-slate-300 bg-white">
         {displayUrl ? (
-          <img src={displayUrl} alt={label} className="h-full w-full object-cover" />
+          <>
+            <button type="button" className="h-full w-full" onClick={() => setIsPreviewOpen(true)}>
+              <img src={displayUrl} alt={label} className="h-full w-full object-cover" />
+            </button>
+            <div className="absolute inset-x-2 bottom-2 flex items-center justify-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">
+              <button
+                type="button"
+                className="rounded-full bg-black/45 px-2.5 py-1 text-[10px] text-white backdrop-blur-sm"
+                onClick={() => setIsPreviewOpen(true)}
+              >
+                {"\uBCF4\uAE30"}
+              </button>
+              <button
+                type="button"
+                className="rounded-full bg-black/45 px-2.5 py-1 text-[10px] text-white backdrop-blur-sm"
+                onClick={openFilePicker}
+              >
+                {"\uBCC0\uACBD"}
+              </button>
+            </div>
+          </>
         ) : (
-          <div className="flex h-full w-full flex-col items-center justify-center text-[11px] text-slate-400">
+          <button
+            type="button"
+            className="flex h-full w-full flex-col items-center justify-center text-[11px] text-slate-400"
+            onClick={openFilePicker}
+          >
             <ImagePlus className="mb-1.5 h-4 w-4" />
-            사진 선택
-          </div>
+            {"\uC0AC\uC9C4 \uC120\uD0DD"}
+          </button>
         )}
-        <div className="pointer-events-none absolute inset-x-2 bottom-2 rounded-full bg-black/35 px-2 py-1 text-center text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
-          {displayUrl ? "사진 바꾸기" : "사진 찍기 또는 선택"}
-        </div>
         <input ref={inputRef} type="file" name={inputName} accept="image/*" className="hidden" onChange={handleFileChange} />
-      </label>
+      </div>
+      {displayUrl ? (
+        <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
+          <DialogContent className="overflow-hidden border-none bg-transparent p-0 shadow-none sm:max-w-xl">
+            <img src={displayUrl} alt={label} className="max-h-[80vh] w-full rounded-3xl object-contain bg-black" />
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </div>
   );
 }

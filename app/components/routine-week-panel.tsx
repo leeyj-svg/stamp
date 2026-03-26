@@ -1,9 +1,15 @@
 import { useMemo } from "react";
+import { Link } from "react-router";
 
-import { getMonthWeekRanges } from "~/lib/ledger-listing";
+import { buildBudgetQuery, getMonthWeekRanges, type EntryFilterValue } from "~/lib/ledger-listing";
 import { cn } from "~/lib/utils";
 
 type RoutineWeekPanelProps = {
+  monthToken: string;
+  selectedFilter: EntryFilterValue;
+  displayParam: string | null;
+  showCurrentWeekBudget: boolean;
+  selectedCategoryIds: number[];
   weekStartDay: "SUNDAY" | "MONDAY";
   displayRangeStartAt: string;
   displayRangeEndAt: string;
@@ -52,12 +58,46 @@ function getPercent(successCount: number, goalCount: number | null) {
 }
 
 export function RoutineWeekPanel({
+  monthToken,
+  selectedFilter,
+  displayParam,
+  showCurrentWeekBudget,
+  selectedCategoryIds,
   weekStartDay,
   displayRangeStartAt,
   displayRangeEndAt,
   routineTypes,
   routineRecords,
 }: RoutineWeekPanelProps) {
+  const budgetQuery = useMemo(
+    () => buildBudgetQuery(displayParam, showCurrentWeekBudget, selectedCategoryIds),
+    [displayParam, selectedCategoryIds, showCurrentWeekBudget],
+  );
+
+  function buildRoutinePhotoLink(typeId: number, weekStartAt: string, weekEndAt: string) {
+    const params = new URLSearchParams({
+      month: monthToken,
+      typeId: String(typeId),
+      scope: "week",
+      weekStartAt,
+      weekEndAt,
+      periodStartAt: displayRangeStartAt,
+      periodEndAt: displayRangeEndAt,
+    });
+
+    if (selectedFilter !== "ALL") {
+      params.set("type", selectedFilter);
+    }
+
+    if (budgetQuery) {
+      for (const [key, value] of new URLSearchParams(budgetQuery)) {
+        params.set(key, value);
+      }
+    }
+
+    return `/ledger/routine/photos?${params.toString()}`;
+  }
+
   const weekGroups = useMemo(() => {
     const displayRangeStart = new Date(displayRangeStartAt);
     const displayRangeEnd = new Date(displayRangeEndAt);
@@ -91,6 +131,8 @@ export function RoutineWeekPanel({
       return {
         id: `${range.start.toISOString()}-${index}`,
         label: formatWeekRangeLabel(range.start, range.end),
+        startAt: range.start.toISOString(),
+        endAt: range.end.toISOString(),
         summaries,
       };
     });
@@ -142,6 +184,14 @@ export function RoutineWeekPanel({
                         backgroundColor: summary.successCount > 0 ? summary.color : undefined,
                       }}
                     />
+                  </div>
+                  <div className="flex justify-end">
+                    <Link
+                      to={buildRoutinePhotoLink(summary.id, group.startAt, group.endAt)}
+                      className="text-[0.64rem] text-slate-400 transition-colors hover:text-slate-600"
+                    >
+                      사진보기
+                    </Link>
                   </div>
                 </div>
               ))}
