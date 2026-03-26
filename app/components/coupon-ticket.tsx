@@ -85,7 +85,7 @@ export function CouponTicket({
             )}
           >
             <div>
-              <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400">Expires</p>
+              <p className="text-[10px] font-medium tracking-[0.18em] text-slate-400">사용기한</p>
               <p className={cn("mt-1 font-semibold text-slate-700", compact ? "text-xs" : "text-sm")}>
                 {expiresLabel}까지
               </p>

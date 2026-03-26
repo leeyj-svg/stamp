@@ -233,7 +233,7 @@ export default function SpaceMain() {
                     <h1 className="font-bold text-xl md:basedrop-shadow-md bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
                         {space.title}
                     </h1>
-                    {isOwner && isDatePassed && <span className="text-[10px] text-pink-400 font-bold block">Welcome Back! 👑</span>}
+                    {isOwner && isDatePassed && <span className="text-[10px] text-pink-400 font-bold block">다시 오신 걸 환영해요! 👑</span>}
                 </div>
 
                 <div className="flex gap-2 pointer-events-auto">
@@ -326,12 +326,12 @@ function MobileMessageCard({ post }: { post: SpacePost }) {
     return (
         <div className={`w-full bg-slate-900/80 backdrop-blur-md border ${themeColor} rounded-xl p-5 shadow-lg animate-pop-in-up`}>
             <div className="flex items-center justify-between mb-3 border-b border-white/10 pb-2">
-                <span className="text-xs text-white/50 uppercase">From</span>
+                <span className="text-xs text-white/50 uppercase">보낸 사람</span>
                 <span className="font-bold text-white text-sm">{post.nickname}</span>
             </div>
             {post.mediaUrl && (
                 <div className="h-40 w-full overflow-hidden rounded-lg mb-3">
-                    <img src={post.mediaUrl} className="w-full h-full object-cover" alt="attachment" />
+                    <img src={post.mediaUrl} className="w-full h-full object-cover" alt="첨부 이미지" />
                 </div>
             )}
             <p className="text-white/90 whitespace-pre-wrap text-sm leading-relaxed">
