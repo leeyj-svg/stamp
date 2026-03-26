@@ -935,6 +935,11 @@ export default function LedgerWeeksPage() {
 
           <div className="w-1/2 shrink-0">
             <RoutineWeekPanel
+              monthToken={monthToken}
+              selectedFilter={selectedFilter}
+              displayParam={displayParam}
+              showCurrentWeekBudget={showCurrentWeekBudget}
+              selectedCategoryIds={selectedCategoryIds}
               weekStartDay={weekStartDay}
               displayRangeStartAt={displayRangeStartAt}
               displayRangeEndAt={displayRangeEndAt}

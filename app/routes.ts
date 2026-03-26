@@ -35,6 +35,7 @@ export default [
     route("ledger/stats", "routes/ledger.stats.tsx"),
     route("ledger/list", "routes/ledger.list.tsx"),
     route("ledger/weeks", "routes/ledger.weeks.tsx"),
+    route("ledger/routine/photos", "routes/ledger.routine-photos.tsx"),
     route("ledger/new", "routes/ledger.new.tsx"),
     route("ledger/entries/:entryId/edit", "routes/ledger.entries.$entryId.edit.tsx"),
     route("ledger/:date", "routes/ledger.$date.tsx"),
