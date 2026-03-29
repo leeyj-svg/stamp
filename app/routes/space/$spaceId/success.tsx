@@ -80,7 +80,7 @@ export default function SuccessPage() {
                             <p className="text-lg font-medium leading-relaxed relative z-10 break-keep">"{post.content}"</p>
                             <div className="mt-4 flex justify-between items-end border-t border-white/20 pt-3">
                                 <span className="text-xs opacity-70">{formattedDate}</span>
-                                <span className="font-bold text-sm">From. {post.nickname}</span>
+                                <span className="font-bold text-sm">보낸 사람 · {post.nickname}</span>
                             </div>
                         </div>
                     )}

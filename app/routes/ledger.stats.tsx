@@ -418,7 +418,7 @@ function getComparisonDeltaMeta(type: LedgerEntryTypeValue | "NET", delta: numbe
 
 function getDonutPalette(tone: DonutTone) {
   if (tone === "payment") {
-    return ["#fb7185", "#f97316", "#f59e0b", "#ef4444", "#f43f5e", "#fda4af"];
+    return ["#60a5fa", "#8b5cf6", "#f59e0b", "#94a3b8", "#38bdf8", "#c084fc"];
   }
 
   return ["#0f766e", "#0284c7", "#7c3aed", "#f97316", "#e11d48", "#64748b"];
@@ -2037,6 +2037,7 @@ function AmountStatList({
 function getPaymentMethodTone(label: string) {
   if (label.includes("카드")) {
     return {
+      baseColor: "#60a5fa",
       cardClassName: "bg-sky-50",
       labelClassName: "text-sky-600",
       chipClassName: "text-sky-700",
@@ -2046,6 +2047,7 @@ function getPaymentMethodTone(label: string) {
 
   if (label.includes("계좌")) {
     return {
+      baseColor: "#8b5cf6",
       cardClassName: "bg-violet-50",
       labelClassName: "text-violet-600",
       chipClassName: "text-violet-700",
@@ -2055,6 +2057,7 @@ function getPaymentMethodTone(label: string) {
 
   if (label.includes("현금")) {
     return {
+      baseColor: "#f59e0b",
       cardClassName: "bg-amber-50",
       labelClassName: "text-amber-600",
       chipClassName: "text-amber-700",
@@ -2063,6 +2066,7 @@ function getPaymentMethodTone(label: string) {
   }
 
   return {
+    baseColor: "#94a3b8",
     cardClassName: "bg-slate-50",
     labelClassName: "text-slate-700",
     chipClassName: "text-slate-700",
@@ -2100,7 +2104,7 @@ function PaymentMethodDetailList({
           <div className="h-2 overflow-hidden rounded-full bg-white/70">
             <div
               className="flex h-full overflow-hidden rounded-full"
-              style={{ width: `${item.percent}%` }}
+              style={{ width: "100%" }}
               title={`${item.label} ${item.percent}%`}
             >
               {item.sources.map((source, index) => {
@@ -2728,12 +2732,14 @@ function BreakdownDonutCard({
   const totalAmount = items.reduce((sum, item) => sum + item.amount, 0);
   const donutItems = buildDonutBreakdown(items);
   const palette = getDonutPalette(tone);
+  const itemColors =
+    tone === "payment" ? donutItems.map((item) => getPaymentMethodTone(item.label).baseColor) : donutItems.map((_, index) => palette[index % palette.length]);
   let currentPercent = 0;
   const gradientStops = donutItems
     .map((item, index) => {
       const start = currentPercent;
       currentPercent += item.percent;
-      return `${palette[index % palette.length]} ${start}% ${currentPercent}%`;
+      return `${itemColors[index]} ${start}% ${currentPercent}%`;
     })
     .join(", ");
 
@@ -2759,7 +2765,7 @@ function BreakdownDonutCard({
               <div className="flex min-w-0 items-center gap-2">
                 <span
                   className="h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: palette[index % palette.length] }}
+                  style={{ backgroundColor: itemColors[index] }}
                 />
                 <p className="truncate text-[0.78rem] font-medium text-slate-700">{item.label}</p>
               </div>

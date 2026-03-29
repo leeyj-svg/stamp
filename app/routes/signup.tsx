@@ -44,17 +44,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 const formSchema = z.object({
-  name: z.string().min(2, { message: 'Please enter at least 2 characters for name.' }),
+  name: z.string().min(2, { message: '이름은 2자 이상 입력해 주세요.' }),
   phoneNumber: z
     .string()
-    .regex(/^\d{3}-?\d{3,4}-?\d{4}$/, { message: 'Please enter a valid phone number.' })
+    .regex(/^\d{3}-?\d{3,4}-?\d{4}$/, { message: '올바른 전화번호를 입력해 주세요.' })
     .transform((value) => value.replace(/\D/g, '')),
-  password: z.string().min(4, { message: 'Password must be at least 4 characters.' }),
+  password: z.string().min(4, { message: '비밀번호는 4자 이상 입력해 주세요.' }),
   agreedToTerms: z.boolean().refine((value) => value, {
-    message: 'You must agree to the terms of service.',
+    message: '이용약관에 동의해 주세요.',
   }),
   agreedToPrivacyPolicy: z.boolean().refine((value) => value, {
-    message: 'You must agree to the privacy policy.',
+    message: '개인정보처리방침에 동의해 주세요.',
   }),
   agreedToMarketing: z.boolean().default(false).optional(),
 });
@@ -77,7 +77,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const validationResult = formSchema.safeParse(submission);
 
   if (!validationResult.success) {
-    const firstError = validationResult.error.issues[0]?.message ?? 'Invalid input.';
+    const firstError = validationResult.error.issues[0]?.message ?? '입력한 내용을 다시 확인해 주세요.';
     flashSession.flash('toast', { message: firstError, type: 'error' });
     return redirect(`/signup${claimCode ? `?claimCode=${claimCode}` : ''}`, {
       headers: { 'Set-Cookie': await commitSession(flashSession) },
@@ -93,12 +93,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       let userId: string;
       let stampNotification: { eventName: string; currentCount: number } | null = null;
 
-      if (existingUser) {
-        if (existingUser.status === 'ACTIVE') {
-          throw new Prisma.PrismaClientKnownRequestError('Phone number already in use.', {
-            code: 'P2002',
-            clientVersion: '',
-          });
+        if (existingUser) {
+          if (existingUser.status === 'ACTIVE') {
+            throw new Prisma.PrismaClientKnownRequestError('이미 사용 중인 전화번호입니다.', {
+              code: 'P2002',
+              clientVersion: '',
+            });
         }
 
         const updatedUser = await prisma.user.update({
@@ -151,13 +151,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         });
 
         if (!claimableStamp) {
-          throw new Error('Invalid claim code.');
+          throw new Error('유효하지 않은 적립 코드입니다.');
         }
         if (new Date() > claimableStamp.expiresAt) {
-          throw new Error('This claim code is expired.');
+          throw new Error('만료된 적립 코드입니다.');
         }
         if (claimableStamp.maxUses !== null && claimableStamp.currentUses >= claimableStamp.maxUses) {
-          throw new Error('This claim code is fully used.');
+          throw new Error('이미 모두 사용된 적립 코드입니다.');
         }
 
         const existingRedemption = await prisma.claimableStampRedemption.findUnique({
@@ -170,7 +170,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         });
 
         if (existingRedemption) {
-          throw new Error('You already used this claim code.');
+          throw new Error('이미 사용한 적립 코드입니다.');
         }
 
         let activeStampCard = await prisma.stampCard.findFirst({
@@ -257,7 +257,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     flashSession.flash('toast', {
       type: 'success',
-      message: claimCode ? 'Sign-up and stamp save completed.' : 'Sign-up completed.',
+      message: claimCode ? '회원가입과 스탬프 적립이 완료되었습니다.' : '회원가입이 완료되었습니다.',
     });
 
     const headers = new Headers();
@@ -268,10 +268,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   } catch (error: unknown) {
     const message =
       error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002'
-        ? 'Phone number already in use.'
+        ? '이미 사용 중인 전화번호입니다.'
         : error instanceof Error
           ? error.message
-          : 'Unexpected error occurred during sign-up.';
+          : '회원가입 중 오류가 발생했습니다.';
 
     flashSession.flash('toast', { message, type: 'error' });
     return redirect(`/signup${claimCode ? `?claimCode=${claimCode}` : ''}`, {
@@ -305,7 +305,7 @@ function PolicyDialog({
         <DialogFooter className="pt-4 border-t">
           <DialogClose asChild>
             <Button type="button" variant="secondary">
-              Close
+              닫기
             </Button>
           </DialogClose>
         </DialogFooter>
@@ -358,14 +358,14 @@ export default function SignupPage() {
     <div className="container mx-auto flex h-full items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="text-2xl">Sign up</CardTitle>
-          <CardDescription>Create your account.</CardDescription>
+          <CardTitle className="text-2xl">회원가입</CardTitle>
+          <CardDescription>계정을 만들고 서비스를 시작해 보세요.</CardDescription>
         </CardHeader>
         <CardContent>
           {claimCode && (
             <div className="flex p-4 mb-4 text-sm text-green-800 rounded-lg bg-green-50" role="alert">
               <div>
-                <span className="font-medium">Claim code detected.</span> Complete sign-up to receive your stamp.
+                <span className="font-medium">적립 코드를 확인했어요.</span> 회원가입을 완료하면 스탬프가 적립됩니다.
               </div>
             </div>
           )}
@@ -374,12 +374,26 @@ export default function SignupPage() {
             <form onSubmit={form.handleSubmit(onSubmit)} method="post" className="space-y-4">
               <FormField
                 control={form.control}
-                name="name"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Name</FormLabel>
-                    <FormControl>
-                      <Input placeholder="Your name" {...field} />
+                  name="name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>이름</FormLabel>
+                      <FormControl>
+                        <Input placeholder="이름을 입력해 주세요" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                  name="phoneNumber"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>전화번호</FormLabel>
+                      <FormControl>
+                        <Input placeholder="01012345678" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -388,29 +402,15 @@ export default function SignupPage() {
 
               <FormField
                 control={form.control}
-                name="phoneNumber"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Phone number</FormLabel>
-                    <FormControl>
-                      <Input placeholder="01012345678" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="password"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Password</FormLabel>
-                    <FormControl>
-                      <Input type="password" placeholder="******" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
+                  name="password"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>비밀번호</FormLabel>
+                      <FormControl>
+                        <Input type="password" placeholder="비밀번호를 입력해 주세요" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
                 )}
               />
 
@@ -421,7 +421,7 @@ export default function SignupPage() {
                     htmlFor="all-agree"
                     className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
                   >
-                    Agree all (includes marketing)
+                    전체 동의(마케팅 포함)
                   </label>
                 </div>
 
@@ -436,9 +436,9 @@ export default function SignupPage() {
                         <FormControl>
                           <Checkbox checked={field.value} onCheckedChange={field.onChange} />
                         </FormControl>
-                        <FormLabel className="text-sm font-normal">[Required] Terms of service</FormLabel>
+                        <FormLabel className="text-sm font-normal">[필수] 이용약관</FormLabel>
                       </div>
-                      <PolicyDialog triggerText="View" title="Terms of service">
+                      <PolicyDialog triggerText="보기" title="이용약관">
                         <TermsOfServiceContent />
                       </PolicyDialog>
                     </FormItem>
@@ -454,9 +454,9 @@ export default function SignupPage() {
                         <FormControl>
                           <Checkbox checked={field.value} onCheckedChange={field.onChange} />
                         </FormControl>
-                        <FormLabel className="text-sm font-normal">[Required] Privacy policy</FormLabel>
+                        <FormLabel className="text-sm font-normal">[필수] 개인정보처리방침</FormLabel>
                       </div>
-                      <PolicyDialog triggerText="View" title="Privacy policy">
+                      <PolicyDialog triggerText="보기" title="개인정보처리방침">
                         <PrivacyPolicyContent />
                       </PolicyDialog>
                     </FormItem>
@@ -471,7 +471,7 @@ export default function SignupPage() {
                       <FormControl>
                         <Checkbox checked={field.value} onCheckedChange={field.onChange} />
                       </FormControl>
-                      <FormLabel className="text-sm font-normal">[Optional] Marketing agreement</FormLabel>
+                      <FormLabel className="text-sm font-normal">[선택] 마케팅 수신 동의</FormLabel>
                     </FormItem>
                   )}
                 />
@@ -483,15 +483,15 @@ export default function SignupPage() {
               </div>
 
               <Button type="submit" className="w-full" disabled={fetcher.state !== 'idle'}>
-                {fetcher.state !== 'idle' ? 'Submitting...' : 'Sign up'}
+                {fetcher.state !== 'idle' ? '가입 중...' : '회원가입'}
               </Button>
             </form>
           </Form>
 
           <div className="mt-4 text-center text-xs">
-            Already have an account?{' '}
+            이미 계정이 있으신가요?{' '}
             <Link to="/login" className="underline">
-              Log in
+              로그인
             </Link>
           </div>
         </CardContent>
