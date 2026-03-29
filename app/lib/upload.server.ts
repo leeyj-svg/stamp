@@ -117,8 +117,54 @@ export async function uploadImages(files: File[]): Promise<{ url: string; takenA
   const results = await Promise.all(uploadPromises);
 
   // 결과가 null이 아닌 것만 필터링하고, 타입스크립트에게 구체적인 객체 형태임을 알려줍니다.
-  return results.filter((result): result is { url: string; takenAt: Date | null } => result !== null);
+return results.filter((result): result is { url: string; takenAt: Date | null } => result !== null);
 }
+
+export function isStorageUploadAvailable() {
+  return Boolean(ENV_UPLOAD_URL);
+}
+
+export async function uploadFileToStorage(file: File): Promise<{ url: string; mimeType: string | null; byteSize: number } | null> {
+  if (!file || file.size === 0) return null;
+  if (!ENV_UPLOAD_URL) return null;
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const safeOriginalName = (file.name || "file")
+      .replace(/[^\w.\-]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "file";
+    const filename = `${Date.now()}-${Math.round(Math.random() * 1E9)}-${safeOriginalName}`;
+
+    const formData = new FormData();
+    const blob = new Blob([new Uint8Array(buffer)], { type: file.type || "application/octet-stream" });
+    formData.append("file", blob, filename);
+
+    const urlObj = new URL(ENV_UPLOAD_URL);
+    const { data } = await axios.post(`${INTERNAL_HOST}${urlObj.pathname}`, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+      timeout: 60000,
+    });
+
+    if (!data.success) {
+      return null;
+    }
+
+    return {
+      url: `${PUBLIC_VIEW_ROOT}${data.url}`,
+      mimeType: file.type || null,
+      byteSize: file.size,
+    };
+  } catch (error: unknown) {
+    if (axios.isAxiosError(error)) {
+      console.error("[File Upload Error]", error.message);
+    } else if (error instanceof Error) {
+      console.error("[File Upload Error]", error.message);
+    }
+    return null;
+  }
+}
+
 export async function deleteImage(fullUrl: string) {
   if (!fullUrl) return;
   try {

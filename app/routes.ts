@@ -39,6 +39,10 @@ export default [
     route("ledger/new", "routes/ledger.new.tsx"),
     route("ledger/entries/:entryId/edit", "routes/ledger.entries.$entryId.edit.tsx"),
     route("ledger/:date", "routes/ledger.$date.tsx"),
+    route("devlog", "routes/devlog.tsx"),
+    route("devlog/archive", "routes/devlog.archive.tsx"),
+    route("devlog/:date", "routes/devlog.$date.tsx"),
+    route("devlog/:date/work/:workItemId", "routes/devlogWorkWindow.tsx"),
     route("memory/new", "routes/memory/new.tsx"),
     // 異뷀썑 ???덉씠?꾩썐???ъ슜?섎뒗 ?ㅻⅨ ?섏씠吏媛 ?앷린硫??ш린??異붽??섎㈃ ?⑸땲??
     // ?? route("my-page", "routes/my-page.tsx"),s
