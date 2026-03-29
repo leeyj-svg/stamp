@@ -39,6 +39,7 @@ export default [
     route("ledger/entries/:entryId/edit", "routes/ledger.entries.$entryId.edit.tsx"),
     route("ledger/:date", "routes/ledger.$date.tsx"),
     route("devlog", "routes/devlog.tsx"),
+    route("devlog/archive", "routes/devlog.archive.tsx"),
     route("devlog/:date", "routes/devlog.$date.tsx"),
     route("devlog/:date/work/:workItemId", "routes/devlogWorkWindow.tsx"),
     route("memory/new", "routes/memory/new.tsx"),

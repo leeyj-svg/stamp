@@ -72,17 +72,6 @@ enum DevWorkAttachmentKind {
   OTHER
 }
 
-enum DevWorkLogType {
-  CREATED
-  STATUS_CHANGED
-  NOTE_UPDATED
-  CHECKLIST_UPDATED
-  ATTACHMENT_ADDED
-  ATTACHMENT_REMOVED
-  MINIMIZED
-  RESTORED
-}
-
 model User {
   id          String     @id @default(cuid())
   name        String
@@ -119,10 +108,10 @@ model User {
   routineTypes               RoutineType[]
   routineRecords             RoutineRecord[]
   routineDayNotes            RoutineDayNote[]
+  devWorkSets                DevWorkSet[]
   devWorkStatuses            DevWorkStatusDefinition[]
   devDiaryPages              DevDiaryPage[]
   devWorkItems               DevWorkItem[]
-  devWorkLogs                DevWorkLog[]
 }
 
 model LedgerSettings {
@@ -373,9 +362,33 @@ model RoutineDayNote {
   @@index([userId, recordDate])
 }
 
+model DevWorkSet {
+  id        Int      @id @default(autoincrement())
+  userId    String
+  name      String
+  icon      String   @default("briefcase")
+  color     String   @default("#b7844d")
+  githubIssueRepoOwner String? @db.VarChar(191)
+  githubIssueRepoName String?  @db.VarChar(191)
+  githubIssueLabels String?    @db.VarChar(512)
+  githubIssueTokenEncrypted String? @db.Text
+  sortOrder Int      @default(0)
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  diaryPages DevDiaryPage[]
+  workItems  DevWorkItem[]
+
+  @@index([userId, sortOrder])
+  @@index([userId, isDefault])
+}
+
 model DevDiaryPage {
   id        Int      @id @default(autoincrement())
   userId    String
+  workSetId Int
   pageDate  DateTime
   title     String?
   noteMd    String?  @db.Text
@@ -384,10 +397,11 @@ model DevDiaryPage {
   updatedAt DateTime @updatedAt
 
   user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workSet   DevWorkSet          @relation(fields: [workSetId], references: [id], onDelete: Cascade)
   workItems DevDiaryPageEntry[]
 
-  @@unique([userId, pageDate])
-  @@index([userId, pageDate])
+  @@unique([userId, workSetId, pageDate])
+  @@index([userId, workSetId, pageDate])
 }
 
 model DevWorkStatusDefinition {
@@ -408,11 +422,15 @@ model DevWorkStatusDefinition {
 model DevWorkItem {
   id           Int           @id @default(autoincrement())
   userId       String
+  workSetId    Int
   parentWorkItemId Int?
   title        String
   status       String        @default("TODO") @db.VarChar(64)
   contentMd    String?       @db.Text
   nextAction   String?       @db.Text
+  githubIssueRepo String?    @db.VarChar(191)
+  githubIssueNumber Int?
+  githubIssueUrl  String?    @db.VarChar(512)
   priority     Int           @default(0)
   sortOrder    Int           @default(0)
   isMinimized  Boolean       @default(false)
@@ -427,18 +445,33 @@ model DevWorkItem {
   updatedAt    DateTime      @updatedAt
 
   user            User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workSet         DevWorkSet             @relation(fields: [workSetId], references: [id], onDelete: Cascade)
   parentWorkItem  DevWorkItem?           @relation("DevWorkItemHierarchy", fields: [parentWorkItemId], references: [id], onDelete: SetNull)
   childWorkItems  DevWorkItem[]          @relation("DevWorkItemHierarchy")
   diaryPages      DevDiaryPageEntry[]
+  notes           DevWorkNote[]
   checklist       DevWorkChecklistItem[]
   attachments     DevWorkAttachment[]
-  logs            DevWorkLog[]
+  @@index([userId, workSetId, status, updatedAt])
+  @@index([userId, workSetId, parentWorkItemId, updatedAt])
+  @@index([userId, workSetId, plannedDate])
+  @@index([userId, workSetId, isMinimized, updatedAt])
+  @@index([userId, workSetId, isPinned, updatedAt])
+  @@index([githubIssueRepo, githubIssueNumber])
+}
 
-  @@index([userId, status, updatedAt])
-  @@index([userId, parentWorkItemId, updatedAt])
-  @@index([userId, plannedDate])
-  @@index([userId, isMinimized, updatedAt])
-  @@index([userId, isPinned, updatedAt])
+model DevWorkNote {
+  id         Int      @id @default(autoincrement())
+  workItemId Int
+  contentMd  String   @db.Text
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  workItem DevWorkItem @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+
+  @@index([workItemId, sortOrder])
+  @@index([workItemId, createdAt])
 }
 
 model DevDiaryPageEntry {
@@ -490,25 +523,6 @@ model DevWorkAttachment {
 
   @@index([workItemId, sortOrder])
   @@index([workItemId, kind, createdAt])
-}
-
-model DevWorkLog {
-  id         Int            @id @default(autoincrement())
-  userId     String
-  workItemId Int
-  logDate    DateTime
-  type       DevWorkLogType @default(NOTE_UPDATED)
-  message    String?
-  noteMd     String?        @db.Text
-  meta       Json?
-  createdAt  DateTime       @default(now())
-
-  user     User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  workItem DevWorkItem @relation(fields: [workItemId], references: [id], onDelete: Cascade)
-
-  @@index([userId, logDate, createdAt])
-  @@index([workItemId, createdAt])
-  @@index([workItemId, type, createdAt])
 }
 
 model Session {

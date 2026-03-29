@@ -2,10 +2,15 @@ import { PrismaClient } from "@prisma/client";
 
 const globalForPrisma = globalThis as typeof globalThis & {
   __db?: PrismaClient;
+  __dbCacheKey?: string;
 };
 
-export const db = globalForPrisma.__db ?? new PrismaClient();
+const PRISMA_CACHE_KEY = "dev-work-set-github-settings-v4";
 
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.__db = db;
+if (!globalForPrisma.__db || globalForPrisma.__dbCacheKey !== PRISMA_CACHE_KEY) {
+  void globalForPrisma.__db?.$disconnect().catch(() => undefined);
+  globalForPrisma.__db = new PrismaClient();
+  globalForPrisma.__dbCacheKey = PRISMA_CACHE_KEY;
 }
+
+export const db = globalForPrisma.__db;
