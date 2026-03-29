@@ -2,6 +2,7 @@
 import { Form, Link, Outlet, useLoaderData, useLocation, type LoaderFunctionArgs } from "react-router";
 import {
   BookHeart,
+  ClipboardPen,
   Home,
   Images,
   LayoutDashboard,
@@ -133,13 +134,23 @@ function BottomNav({ user }: { user: LoaderData["user"] }) {
 
               <div className="grid gap-4 py-4">
                 {user.role === "ADMIN" && (
-                  <SheetClose asChild>
-                    <Button variant="outline" asChild className="justify-start">
-                      <Link to="/admin" className="text-gray-800">
-                        <LayoutDashboard className="mr-2 h-5 w-5" /> 관리자 페이지
-                      </Link>
-                    </Button>
-                  </SheetClose>
+                  <>
+                    <SheetClose asChild>
+                      <Button variant="outline" asChild className="justify-start">
+                        <Link to="/admin" className="text-gray-800">
+                          <LayoutDashboard className="mr-2 h-5 w-5" /> 관리자 페이지
+                        </Link>
+                      </Button>
+                    </SheetClose>
+
+                    <SheetClose asChild>
+                      <Button variant="outline" asChild className="justify-start">
+                        <Link to="/devlog" className="text-gray-800">
+                          <ClipboardPen className="mr-2 h-5 w-5 text-gray-600" /> 개발 로그
+                        </Link>
+                      </Button>
+                    </SheetClose>
+                  </>
                 )}
 
                 <SheetClose asChild>
@@ -204,7 +215,7 @@ function BottomNav({ user }: { user: LoaderData["user"] }) {
 export default function MobileLayout() {
   const { user, toastMessage } = useLoaderData<LoaderData>();
   const { pathname } = useLocation();
-  const hideChrome = pathname.startsWith("/ledger");
+  const hideChrome = pathname.startsWith("/ledger") || pathname.startsWith("/devlog");
 
   useEffect(() => {
     if (!toastMessage) return;
