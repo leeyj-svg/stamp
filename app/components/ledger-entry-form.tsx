@@ -503,9 +503,6 @@ export function LedgerEntryForm({
             {amountError ? (
               <p className="mt-2 pl-20 text-xs text-rose-500">{amountError}</p>
             ) : null}
-            {hasAmountValue && numericAmount === 0 ? (
-              <p className="mt-2 pl-20 text-xs text-slate-500">0원 내역은 메모나 태그로 구분해 주세요.</p>
-            ) : null}
           </div>
 
           <div className="border-b px-6 py-2">
