@@ -15,6 +15,7 @@ import { applyManualCarryToCurrentLedgerWeek, getCurrentLedgerWeekBudgetSummary 
 import { db } from "~/lib/db.server";
 import {
   formatLedgerAmount,
+  getLedgerBenefitTagAmount,
   getDateKey,
   getPaymentMethodLabel,
   parseRequiredDateToken,
@@ -766,6 +767,7 @@ export default function LedgerDatePage() {
                     const paymentDetail = [entry.paymentSourceName?.trim(), entry.paymentMethodLabel].filter(Boolean).join("-");
                     const tagDetail = entry.tagNames.length > 0 ? entry.tagNames.join(", ") : "";
                     const detailText = [paymentDetail, tagDetail].filter(Boolean).join(" · ");
+                    const benefitTagAmount = entry.amount === 0 ? getLedgerBenefitTagAmount(entry.tagNames) : 0;
 
                     return (
                       <Link
@@ -787,9 +789,21 @@ export default function LedgerDatePage() {
                             {detailText ? <p className="mt-1 truncate text-[0.68rem] leading-tight text-slate-400">{detailText}</p> : null}
                           </div>
 
-                          <p className={cn("shrink-0 whitespace-nowrap pt-1 text-right text-[0.88rem] font-medium", getAmountClass(entry.type))}>
-                            {formatLedgerAmount(entry.amount)}
-                          </p>
+                          <div className="shrink-0 pt-1 text-right">
+                            <p className={cn("whitespace-nowrap text-[0.88rem] font-medium", getAmountClass(entry.type))}>
+                              {formatLedgerAmount(entry.amount)}
+                            </p>
+                            {entry.amount === 0 ? (
+                              <p className="mt-1 rounded-full bg-amber-50 px-2 py-0.5 text-[0.6rem] font-medium text-amber-700">
+                                0원 기록
+                              </p>
+                            ) : null}
+                            {benefitTagAmount > 0 ? (
+                              <p className="mt-1 text-[0.64rem] font-semibold text-slate-500">
+                                표시가 {formatLedgerAmount(benefitTagAmount)}
+                              </p>
+                            ) : null}
+                          </div>
                         </div>
                       </Link>
                     );

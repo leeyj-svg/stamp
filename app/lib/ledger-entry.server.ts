@@ -53,10 +53,23 @@ const optionalPaymentMethodSchema = z.preprocess((value) => {
   return value;
 }, z.enum(PAYMENT_METHODS).optional());
 
+const entryAmountSchema = z.preprocess((value) => {
+  if (typeof value === "string") {
+    const trimmedValue = value.trim();
+    if (!trimmedValue) {
+      return undefined;
+    }
+
+    return Number(trimmedValue);
+  }
+
+  return value;
+}, z.number().finite().nonnegative());
+
 const baseEntrySchema = z.object({
   type: z.enum(ENTRY_TYPES),
   categoryId: optionalCategoryIdSchema,
-  amount: z.coerce.number().positive(),
+  amount: entryAmountSchema,
   usedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   paymentMethod: optionalPaymentMethodSchema,
   paymentSourceName: z.string().trim().max(50).optional(),

@@ -1,5 +1,6 @@
 ﻿import { Link, useLoaderData, type LoaderFunctionArgs } from "react-router";
 import { useMemo, useState } from "react";
+import { useFetcher, type ActionFunctionArgs, type ShouldRevalidateFunctionArgs } from "react-router";
 import { ArrowLeft, ChevronLeft, ChevronRight, MoreVertical } from "lucide-react";
 
 import { Button } from "~/components/ui/button";
@@ -25,13 +26,41 @@ import {
   getBudgetPeriodDayCount,
   getFixedExpenseCategoryIds,
 } from "~/lib/ledger-budget";
-import { ensureLedgerSetup, getLedgerReferenceDateForMonthToken, getMonthToken, shiftMonthToken } from "~/lib/ledger";
+import type {
+  LedgerAiAnalysisMode,
+  LedgerAiSummaryResult,
+  LedgerAiSummarySnapshot,
+  LedgerPurchaseAdviceResult,
+  LedgerPurchaseAdviceSnapshot,
+} from "~/lib/ledger-ai";
+import { generateLedgerPurchaseAdvice, generateLedgerStatsSummary, hasGeminiApiKey } from "~/lib/gemini.server";
+import { ensureLedgerSetup, getLedgerPeriodLabel, getLedgerReferenceDateForMonthToken, getMonthToken, shiftMonthToken } from "~/lib/ledger";
 import { cn } from "~/lib/utils";
 
 type EntryFilterValue = "ALL" | LedgerEntryTypeValue;
 type StatsTabValue = "SUMMARY" | "ANALYSIS" | "FLOW";
 type CategoryChartViewValue = "DONUT" | "BAR";
 type WeekStartDayValue = "MONDAY" | "SUNDAY";
+type LedgerStatsAiActionData = {
+  requestKey: string;
+  report?: LedgerAiSummarySnapshot;
+  summary?: LedgerAiSummaryResult;
+  error?: string;
+  generatedAt?: string;
+};
+type LedgerPurchaseAdviceActionData = {
+  requestKey: string;
+  question?: string;
+  snapshot?: LedgerPurchaseAdviceSnapshot;
+  advice?: LedgerPurchaseAdviceResult;
+  error?: string;
+  generatedAt?: string;
+};
+type LedgerAiAnalysisModeOption = {
+  id: LedgerAiAnalysisMode;
+  label: string;
+  description: string;
+};
 type BudgetPeriodSummary = {
   id: number;
   periodStartAt: string;
@@ -85,6 +114,16 @@ type CategoryBudgetUsageItem = {
   progressValue: number;
   isFixed: boolean;
 };
+type CategoryBudgetUsageSection = {
+  type: LedgerEntryTypeValue;
+  items: CategoryBudgetUsageItem[];
+  fixedSummary: {
+    fixedPlanned: number;
+    fixedActual: number;
+    variablePlanned: number;
+    variableActual: number;
+  };
+};
 
 type HighlightDayCardItem = {
   title: string;
@@ -124,6 +163,39 @@ const WEEKLY_STACK_BAR_CLASSES = [
   "bg-fuchsia-300",
   "bg-slate-400",
 ] as const;
+const LEDGER_AI_SNAPSHOT_MAX_LENGTH = 20_000;
+const LEDGER_AI_ANALYSIS_MODES: LedgerAiAnalysisModeOption[] = [
+  {
+    id: "OVERVIEW",
+    label: "전체 진단",
+    description: "기간 전체의 수입, 지출, 저축, 남은 돈과 특이한 날짜를 봐요.",
+  },
+  {
+    id: "SAVING_POINTS",
+    label: "절약 포인트",
+    description: "지출을 줄일 수 있는 카테고리와 반복 소비를 찾아요.",
+  },
+  {
+    id: "BUDGET_COMPARE",
+    label: "예산 비교",
+    description: "설정한 예산 대비 초과, 위험, 여유 카테고리를 점검해요.",
+  },
+  {
+    id: "LIFE_PATTERN",
+    label: "생활 패턴",
+    description: "요일, 주말, 기간 초중후반 소비 흐름을 살펴봐요.",
+  },
+  {
+    id: "CASH_FLOW",
+    label: "저축/현금흐름",
+    description: "수입 대비 지출, 저축률, 남은 돈 흐름을 확인해요.",
+  },
+  {
+    id: "CATEGORY_REPORT",
+    label: "카테고리 리포트",
+    description: "카테고리별 우선순위와 유지/점검 포인트를 정리해요.",
+  },
+] as const;
 
 function parseMonthToken(value: string | null) {
   if (!value || !/^\d{4}-\d{2}$/.test(value)) {
@@ -139,6 +211,26 @@ function parseEntryFilter(value: string | null): EntryFilterValue {
   }
 
   return "ALL";
+}
+
+function parseLedgerAiAnalysisMode(value: FormDataEntryValue | string | null): LedgerAiAnalysisMode {
+  if (typeof value === "string" && LEDGER_AI_ANALYSIS_MODES.some((mode) => mode.id === value)) {
+    return value as LedgerAiAnalysisMode;
+  }
+
+  return "OVERVIEW";
+}
+
+function getLedgerAiAnalysisModeOption(mode: LedgerAiAnalysisMode) {
+  return LEDGER_AI_ANALYSIS_MODES.find((option) => option.id === mode) ?? LEDGER_AI_ANALYSIS_MODES[0];
+}
+
+function buildLedgerAiRequestKey(monthToken: string, filter: EntryFilterValue, mode: LedgerAiAnalysisMode) {
+  return `${monthToken}:${filter}:${mode}`;
+}
+
+function buildLedgerPurchaseAdviceRequestKey(monthToken: string, filter: EntryFilterValue, question: string) {
+  return `${monthToken}:${filter}:${question.trim().toLowerCase()}`;
 }
 
 function getMonthStart(monthToken: string) {
@@ -465,6 +557,422 @@ function buildAmountBreakdown<T extends { amount: number }>(
     .sort((left, right) => right.amount - left.amount);
 }
 
+type LedgerAiReportEntry = {
+  type: LedgerEntryTypeValue;
+  amount: number;
+  usedAt: string;
+  categoryName: string | null;
+};
+
+type LedgerAiBudgetPlanInput = {
+  type: LedgerEntryTypeValue;
+  allocations: Array<{
+    categoryName: string;
+    plannedAmount: number;
+    isFixed: boolean;
+  }>;
+};
+
+function formatDateToken(date: Date) {
+  return new Intl.DateTimeFormat("sv-SE").format(date);
+}
+
+function getInclusiveEndDateToken(endExclusive: Date) {
+  const endDate = new Date(endExclusive);
+  endDate.setDate(endDate.getDate() - 1);
+  return formatDateToken(endDate);
+}
+
+function getDayIndexInPeriod(dateToken: string, periodStart: Date) {
+  const date = new Date(`${dateToken}T12:00:00`);
+  const start = new Date(periodStart.getFullYear(), periodStart.getMonth(), periodStart.getDate(), 12, 0, 0, 0);
+  return Math.floor((date.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+}
+
+function getWeekdayLabel(dateToken: string) {
+  return new Intl.DateTimeFormat("ko-KR", { weekday: "short" }).format(new Date(`${dateToken}T12:00:00`));
+}
+
+function getPeriodSegmentLabel(dayIndex: number, periodDayCount: number) {
+  const ratio = dayIndex / Math.max(periodDayCount, 1);
+  if (ratio <= 1 / 3) {
+    return "초반";
+  }
+
+  if (ratio <= 2 / 3) {
+    return "중반";
+  }
+
+  return "후반";
+}
+
+function buildLedgerAiSummarySnapshot({
+  analysisMode,
+  entries,
+  budgetPlans,
+  selectedFilter,
+  periodLabel,
+  periodStart,
+  periodEnd,
+}: {
+  analysisMode: LedgerAiAnalysisMode;
+  entries: LedgerAiReportEntry[];
+  budgetPlans: LedgerAiBudgetPlanInput[];
+  selectedFilter: EntryFilterValue;
+  periodLabel: string;
+  periodStart: Date;
+  periodEnd: Date;
+}): LedgerAiSummarySnapshot {
+  const analysisModeOption = getLedgerAiAnalysisModeOption(analysisMode);
+  const visibleEntries = selectedFilter === "ALL" ? entries : entries.filter((entry) => entry.type === selectedFilter);
+  const visibleTypes: LedgerEntryTypeValue[] =
+    selectedFilter === "ALL" ? ["INCOME", "EXPENSE", "SAVING"] : [selectedFilter];
+  const periodDayCount = Math.max(1, Math.round((periodEnd.getTime() - periodStart.getTime()) / (1000 * 60 * 60 * 24)));
+
+  const totals = visibleEntries.reduce(
+    (acc, entry) => {
+      if (entry.type === "INCOME") acc.income += entry.amount;
+      if (entry.type === "EXPENSE") acc.expense += entry.amount;
+      if (entry.type === "SAVING") acc.saving += entry.amount;
+      return acc;
+    },
+    { income: 0, expense: 0, saving: 0 },
+  );
+  const dailyMap = new Map<
+    string,
+    {
+      income: number;
+      expense: number;
+      saving: number;
+      categories: Map<string, { typeLabel: string; categoryName: string; amount: number; count: number }>;
+    }
+  >();
+  const categoryMap = new Map<LedgerEntryTypeValue, Map<string, { amount: number; count: number }>>();
+  const weekdayMap = new Map<string, { income: number; expense: number; saving: number; entryCount: number }>();
+  const segmentMap = new Map<string, { income: number; expense: number; saving: number; entryCount: number }>();
+
+  for (const entry of visibleEntries) {
+    const dateToken = entry.usedAt.slice(0, 10);
+    const categoryName = entry.categoryName ?? "미분류";
+    const weekdayLabel = getWeekdayLabel(dateToken);
+    const segmentLabel = getPeriodSegmentLabel(getDayIndexInPeriod(dateToken, periodStart), periodDayCount);
+    const daily = dailyMap.get(dateToken) ?? {
+      income: 0,
+      expense: 0,
+      saving: 0,
+      categories: new Map<string, { typeLabel: string; categoryName: string; amount: number; count: number }>(),
+    };
+
+    if (entry.type === "INCOME") daily.income += entry.amount;
+    if (entry.type === "EXPENSE") daily.expense += entry.amount;
+    if (entry.type === "SAVING") daily.saving += entry.amount;
+
+    const dailyCategoryKey = `${entry.type}:${categoryName}`;
+    const dailyCategory = daily.categories.get(dailyCategoryKey) ?? {
+      typeLabel: getTypeLabel(entry.type),
+      categoryName,
+      amount: 0,
+      count: 0,
+    };
+    dailyCategory.amount += entry.amount;
+    dailyCategory.count += 1;
+    daily.categories.set(dailyCategoryKey, dailyCategory);
+    dailyMap.set(dateToken, daily);
+
+    const typeCategories = categoryMap.get(entry.type) ?? new Map<string, { amount: number; count: number }>();
+    const category = typeCategories.get(categoryName) ?? { amount: 0, count: 0 };
+    category.amount += entry.amount;
+    category.count += 1;
+    typeCategories.set(categoryName, category);
+    categoryMap.set(entry.type, typeCategories);
+
+    const weekday = weekdayMap.get(weekdayLabel) ?? { income: 0, expense: 0, saving: 0, entryCount: 0 };
+    if (entry.type === "INCOME") weekday.income += entry.amount;
+    if (entry.type === "EXPENSE") weekday.expense += entry.amount;
+    if (entry.type === "SAVING") weekday.saving += entry.amount;
+    weekday.entryCount += 1;
+    weekdayMap.set(weekdayLabel, weekday);
+
+    const segment = segmentMap.get(segmentLabel) ?? { income: 0, expense: 0, saving: 0, entryCount: 0 };
+    if (entry.type === "INCOME") segment.income += entry.amount;
+    if (entry.type === "EXPENSE") segment.expense += entry.amount;
+    if (entry.type === "SAVING") segment.saving += entry.amount;
+    segment.entryCount += 1;
+    segmentMap.set(segmentLabel, segment);
+  }
+
+  let cumulativeNet = 0;
+  const dailyRows = Array.from(dailyMap.entries())
+    .sort((left, right) => left[0].localeCompare(right[0]))
+    .map(([dateToken, value]) => {
+      const net = value.income - value.expense - value.saving;
+      cumulativeNet += net;
+      const dayIndex = getDayIndexInPeriod(dateToken, periodStart);
+
+      return {
+        dateToken,
+        dateLabel: formatStatsDay(dateToken),
+        weekdayLabel: getWeekdayLabel(dateToken),
+        periodSegment: getPeriodSegmentLabel(dayIndex, periodDayCount),
+        dayIndex,
+        income: Math.round(value.income),
+        expense: Math.round(value.expense),
+        saving: Math.round(value.saving),
+        net: Math.round(net),
+        cumulativeNet: Math.round(cumulativeNet),
+        categories: Array.from(value.categories.values())
+          .sort((left, right) => right.amount - left.amount || left.categoryName.localeCompare(right.categoryName, "ko"))
+          .slice(0, 8)
+          .map((item) => ({
+            ...item,
+            amount: Math.round(item.amount),
+          })),
+      };
+    });
+
+  const categorySections = visibleTypes.map((type) => {
+    const grouped = categoryMap.get(type) ?? new Map<string, { amount: number; count: number }>();
+    const totalAmount = Array.from(grouped.values()).reduce((sum, item) => sum + item.amount, 0);
+
+    return {
+      type,
+      typeLabel: getTypeLabel(type),
+      totalAmount: Math.round(totalAmount),
+      items: Array.from(grouped.entries())
+        .sort((left, right) => right[1].amount - left[1].amount || left[0].localeCompare(right[0], "ko"))
+        .map(([categoryName, item]) => ({
+          categoryName,
+          amount: Math.round(item.amount),
+          percent: roundPercent(item.amount, totalAmount),
+          count: item.count,
+        })),
+    };
+  });
+  const budgetCategorySections = visibleTypes.map((type) => {
+    const actualCategories = categoryMap.get(type) ?? new Map<string, { amount: number; count: number }>();
+    const plan = budgetPlans.find((item) => item.type === type);
+    const allocationMap = new Map(
+      (plan?.allocations ?? []).map((allocation) => [
+        allocation.categoryName,
+        {
+          plannedAmount: allocation.plannedAmount,
+          isFixed: allocation.isFixed,
+        },
+      ]),
+    );
+    const categoryNames = new Set([...allocationMap.keys(), ...actualCategories.keys()]);
+
+    return {
+      type,
+      typeLabel: getTypeLabel(type),
+      items: Array.from(categoryNames)
+        .map((categoryName) => {
+          const allocation = allocationMap.get(categoryName);
+          const actualAmount = actualCategories.get(categoryName)?.amount ?? 0;
+          const plannedAmount = allocation?.plannedAmount ?? 0;
+          const remainingAmount = plannedAmount - actualAmount;
+
+          return {
+            categoryName,
+            plannedAmount: Math.round(plannedAmount),
+            actualAmount: Math.round(actualAmount),
+            remainingAmount: Math.round(remainingAmount),
+            progressPercent: plannedAmount > 0 ? Math.round((actualAmount / plannedAmount) * 100) : actualAmount > 0 ? 100 : 0,
+            isFixed: allocation?.isFixed ?? false,
+            hasBudget: Boolean(allocation),
+          };
+        })
+        .filter((item) => item.plannedAmount > 0 || item.actualAmount > 0)
+        .sort((left, right) => {
+          const leftRisk = left.plannedAmount > 0 ? left.actualAmount / left.plannedAmount : left.actualAmount > 0 ? 999 : 0;
+          const rightRisk = right.plannedAmount > 0 ? right.actualAmount / right.plannedAmount : right.actualAmount > 0 ? 999 : 0;
+          return rightRisk - leftRisk || right.actualAmount - left.actualAmount || left.categoryName.localeCompare(right.categoryName, "ko");
+        }),
+    };
+  });
+  const weekdayOrder = ["월", "화", "수", "목", "금", "토", "일"];
+  const weekdaySummary = Array.from(weekdayMap.entries())
+    .map(([weekdayLabel, value]) => ({
+      weekdayLabel,
+      income: Math.round(value.income),
+      expense: Math.round(value.expense),
+      saving: Math.round(value.saving),
+      net: Math.round(value.income - value.expense - value.saving),
+      entryCount: value.entryCount,
+    }))
+    .sort((left, right) => weekdayOrder.indexOf(left.weekdayLabel) - weekdayOrder.indexOf(right.weekdayLabel));
+  const periodSegments = ["초반", "중반", "후반"]
+    .map((segmentLabel) => {
+      const value = segmentMap.get(segmentLabel) ?? { income: 0, expense: 0, saving: 0, entryCount: 0 };
+
+      return {
+        segmentLabel,
+        income: Math.round(value.income),
+        expense: Math.round(value.expense),
+        saving: Math.round(value.saving),
+        net: Math.round(value.income - value.expense - value.saving),
+        entryCount: value.entryCount,
+      };
+    })
+    .filter((item) => item.entryCount > 0);
+  const recurringExpenseCandidates = Array.from(categoryMap.get("EXPENSE")?.entries() ?? [])
+    .map(([categoryName, value]) => ({
+      categoryName,
+      amount: Math.round(value.amount),
+      count: value.count,
+    }))
+    .filter((item) => item.count >= 2)
+    .sort((left, right) => right.count - left.count || right.amount - left.amount)
+    .slice(0, 6);
+  const notableDays = [
+    ...dailyRows
+      .filter((item) => item.expense > 0)
+      .sort((left, right) => right.expense - left.expense)
+      .slice(0, 1)
+      .map((item) => ({
+        dateToken: item.dateToken,
+        dateLabel: item.dateLabel,
+        reason: "지출이 가장 큰 날",
+        amount: item.expense,
+      })),
+    ...dailyRows
+      .filter((item) => item.saving > 0)
+      .sort((left, right) => right.saving - left.saving)
+      .slice(0, 1)
+      .map((item) => ({
+        dateToken: item.dateToken,
+        dateLabel: item.dateLabel,
+        reason: "저축이 가장 큰 날",
+        amount: item.saving,
+      })),
+    ...dailyRows
+      .filter((item) => item.income > 0)
+      .sort((left, right) => right.income - left.income)
+      .slice(0, 1)
+      .map((item) => ({
+        dateToken: item.dateToken,
+        dateLabel: item.dateLabel,
+        reason: "수입이 가장 큰 날",
+        amount: item.income,
+      })),
+  ];
+
+  return {
+    analysisMode,
+    analysisModeLabel: analysisModeOption.label,
+    focusLabel: selectedFilter === "ALL" ? "전체" : getTypeLabel(selectedFilter),
+    periodLabel,
+    periodStartDate: formatDateToken(periodStart),
+    periodEndDate: getInclusiveEndDateToken(periodEnd),
+    periodDayCount,
+    entryCount: visibleEntries.length,
+    totals: {
+      income: Math.round(totals.income),
+      expense: Math.round(totals.expense),
+      saving: Math.round(totals.saving),
+      net: Math.round(totals.income - totals.expense - totals.saving),
+      savingRatePercent: roundPercent(totals.saving, totals.income),
+      expenseRatePercent: roundPercent(totals.expense, totals.income),
+    },
+    dailyRows,
+    categorySections,
+    budgetCategorySections,
+    weekdaySummary,
+    periodSegments,
+    recurringExpenseCandidates,
+    notableDays,
+  };
+}
+
+function buildLedgerPurchaseAdviceSnapshot({
+  question,
+  entries,
+  budgetPlans,
+  selectedFilter,
+  periodLabel,
+  periodStart,
+  periodEnd,
+}: {
+  question: string;
+  entries: LedgerAiReportEntry[];
+  budgetPlans: LedgerAiBudgetPlanInput[];
+  selectedFilter: EntryFilterValue;
+  periodLabel: string;
+  periodStart: Date;
+  periodEnd: Date;
+}): LedgerPurchaseAdviceSnapshot {
+  const totals = entries.reduce(
+    (acc, entry) => {
+      if (entry.type === "INCOME") acc.income += entry.amount;
+      if (entry.type === "EXPENSE") acc.expense += entry.amount;
+      if (entry.type === "SAVING") acc.saving += entry.amount;
+      return acc;
+    },
+    { income: 0, expense: 0, saving: 0 },
+  );
+  const actualMap = new Map<LedgerEntryTypeValue, Map<string, number>>();
+
+  for (const entry of entries) {
+    const categoryName = entry.categoryName ?? "미분류";
+    const typeMap = actualMap.get(entry.type) ?? new Map<string, number>();
+    typeMap.set(categoryName, (typeMap.get(categoryName) ?? 0) + entry.amount);
+    actualMap.set(entry.type, typeMap);
+  }
+
+  const budgetCategories = (["EXPENSE", "SAVING", "INCOME"] as LedgerEntryTypeValue[]).flatMap((type) => {
+    const plan = budgetPlans.find((item) => item.type === type);
+    const allocationMap = new Map(
+      (plan?.allocations ?? []).map((allocation) => [
+        allocation.categoryName,
+        {
+          plannedAmount: allocation.plannedAmount,
+          isFixed: allocation.isFixed,
+        },
+      ]),
+    );
+    const categoryNames = new Set([...allocationMap.keys(), ...(actualMap.get(type)?.keys() ?? [])]);
+
+    return Array.from(categoryNames)
+      .map((categoryName) => {
+        const plannedAmount = allocationMap.get(categoryName)?.plannedAmount ?? 0;
+        const actualAmount = actualMap.get(type)?.get(categoryName) ?? 0;
+        const remainingAmount = plannedAmount - actualAmount;
+
+        return {
+          type,
+          typeLabel: getTypeLabel(type),
+          categoryName,
+          plannedAmount: Math.round(plannedAmount),
+          actualAmount: Math.round(actualAmount),
+          remainingAmount: Math.round(remainingAmount),
+          progressPercent: plannedAmount > 0 ? Math.round((actualAmount / plannedAmount) * 100) : actualAmount > 0 ? 100 : 0,
+          isFixed: allocationMap.get(categoryName)?.isFixed ?? false,
+        };
+      })
+      .filter((item) => item.plannedAmount > 0 || item.actualAmount > 0)
+      .sort((left, right) => {
+        if (left.type === "EXPENSE" && right.type !== "EXPENSE") return -1;
+        if (left.type !== "EXPENSE" && right.type === "EXPENSE") return 1;
+        return right.actualAmount - left.actualAmount || right.plannedAmount - left.plannedAmount;
+      });
+  });
+
+  return {
+    question,
+    periodLabel,
+    periodStartDate: formatDateToken(periodStart),
+    periodEndDate: getInclusiveEndDateToken(periodEnd),
+    focusLabel: selectedFilter === "ALL" ? "전체" : getTypeLabel(selectedFilter),
+    totals: {
+      income: Math.round(totals.income),
+      expense: Math.round(totals.expense),
+      saving: Math.round(totals.saving),
+      net: Math.round(totals.income - totals.expense - totals.saving),
+    },
+    budgetCategories,
+  };
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { user } = await getSessionWithPermission(request, "USER");
   await ensureLedgerSetup(db, user.id);
@@ -625,6 +1133,241 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     prevEntries: prevEntries.map(mapEntry),
   };
 };
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { user } = await getSessionWithPermission(request, "USER");
+
+  const formData = await request.formData();
+  const intent = String(formData.get("intent") ?? "");
+  if (intent !== "generate_ai_summary" && intent !== "ask_purchase_advice") {
+    return new Response("Bad Request", { status: 400 });
+  }
+
+  const monthToken =
+    parseMonthToken(typeof formData.get("monthToken") === "string" ? String(formData.get("monthToken")) : null) ??
+    getMonthToken(new Date());
+  const selectedFilter = parseEntryFilter(typeof formData.get("type") === "string" ? String(formData.get("type")) : null);
+
+  if (intent === "ask_purchase_advice") {
+    const question = typeof formData.get("question") === "string" ? String(formData.get("question")).trim() : "";
+    const requestKey = buildLedgerPurchaseAdviceRequestKey(monthToken, selectedFilter, question);
+
+    if (question.length < 2) {
+      return {
+        requestKey,
+        error: "사고 싶은 물건과 예상 가격을 같이 적어주세요.",
+      } satisfies LedgerPurchaseAdviceActionData;
+    }
+
+    if (!hasGeminiApiKey()) {
+      return {
+        requestKey,
+        question,
+        error: "GEMINI_API_KEY를 설정하면 구매 상담을 바로 쓸 수 있어요.",
+      } satisfies LedgerPurchaseAdviceActionData;
+    }
+
+    await ensureLedgerSetup(db, user.id);
+    const { ensureLedgerBudgetPeriodForDate } = await import("~/lib/ledger-budget.server");
+    const monthStart = getMonthStart(monthToken);
+    const initialBudgetResult = await ensureLedgerBudgetPeriodForDate(db, user.id, monthStart);
+    const statsReferenceDate = getLedgerReferenceDateForMonthToken(
+      monthToken,
+      initialBudgetResult.settings.defaultPeriodBasis as LedgerPeriodBasis,
+      initialBudgetResult.settings.paydayDay ?? 25,
+    );
+    const currentBudgetResult =
+      statsReferenceDate.getTime() === monthStart.getTime()
+        ? initialBudgetResult
+        : await ensureLedgerBudgetPeriodForDate(db, user.id, statsReferenceDate);
+    const periodStart = new Date(currentBudgetResult.period.periodStartAt);
+    const periodEnd = new Date(currentBudgetResult.period.periodEndAt);
+    const entries = await db.ledgerEntry.findMany({
+      where: {
+        userId: user.id,
+        excludeFromStats: false,
+        usedAt: {
+          gte: periodStart,
+          lt: periodEnd,
+        },
+      },
+      select: {
+        type: true,
+        amount: true,
+        usedAt: true,
+        category: {
+          select: {
+            name: true,
+          },
+        },
+      },
+      orderBy: [{ usedAt: "asc" }, { id: "asc" }],
+    });
+    const snapshot = buildLedgerPurchaseAdviceSnapshot({
+      question,
+      entries: entries.map((entry) => ({
+        type: entry.type,
+        amount: Number(entry.amount),
+        usedAt: entry.usedAt.toISOString(),
+        categoryName: entry.category?.name ?? null,
+      })),
+      budgetPlans: currentBudgetResult.period.plans.map((plan) => ({
+        type: plan.type,
+        allocations: plan.allocations.map((allocation) => ({
+          categoryName: allocation.category.name,
+          plannedAmount: Number(allocation.plannedAmount),
+          isFixed: allocation.isFixed,
+        })),
+      })),
+      selectedFilter,
+      periodLabel: getLedgerPeriodLabel(periodStart, periodEnd),
+      periodStart,
+      periodEnd,
+    });
+
+    if (snapshot.budgetCategories.length <= 0) {
+      return {
+        requestKey,
+        question,
+        error: "비교할 카테고리 예산이 아직 없어요.",
+      } satisfies LedgerPurchaseAdviceActionData;
+    }
+
+    const snapshotJson = JSON.stringify(snapshot);
+    if (snapshotJson.length > LEDGER_AI_SNAPSHOT_MAX_LENGTH) {
+      return {
+        requestKey,
+        question,
+        error: "Gemini에 보낼 예산 정보가 너무 커요. 질문을 조금 좁혀 다시 시도해 주세요.",
+      } satisfies LedgerPurchaseAdviceActionData;
+    }
+
+    const advice = await generateLedgerPurchaseAdvice(snapshot);
+    if (!advice) {
+      return {
+        requestKey,
+        question,
+        snapshot,
+        error: "Gemini 구매 상담을 만들지 못했어요. 잠시 후 다시 시도해 주세요.",
+      } satisfies LedgerPurchaseAdviceActionData;
+    }
+
+    return {
+      requestKey,
+      question,
+      snapshot,
+      advice,
+      generatedAt: new Date().toISOString(),
+    } satisfies LedgerPurchaseAdviceActionData;
+  }
+
+  const analysisMode = parseLedgerAiAnalysisMode(formData.get("analysisMode"));
+  const requestKey = buildLedgerAiRequestKey(monthToken, selectedFilter, analysisMode);
+
+  if (!hasGeminiApiKey()) {
+    return {
+      requestKey,
+      error: "GEMINI_API_KEY를 설정하면 AI 통계 요약을 바로 쓸 수 있어요.",
+    } satisfies LedgerStatsAiActionData;
+  }
+
+  await ensureLedgerSetup(db, user.id);
+  const { ensureLedgerBudgetPeriodForDate } = await import("~/lib/ledger-budget.server");
+  const monthStart = getMonthStart(monthToken);
+  const initialBudgetResult = await ensureLedgerBudgetPeriodForDate(db, user.id, monthStart);
+  const statsReferenceDate = getLedgerReferenceDateForMonthToken(
+    monthToken,
+    initialBudgetResult.settings.defaultPeriodBasis as LedgerPeriodBasis,
+    initialBudgetResult.settings.paydayDay ?? 25,
+  );
+  const currentBudgetResult =
+    statsReferenceDate.getTime() === monthStart.getTime()
+      ? initialBudgetResult
+      : await ensureLedgerBudgetPeriodForDate(db, user.id, statsReferenceDate);
+  const periodStart = new Date(currentBudgetResult.period.periodStartAt);
+  const periodEnd = new Date(currentBudgetResult.period.periodEndAt);
+  const entries = await db.ledgerEntry.findMany({
+    where: {
+      userId: user.id,
+      excludeFromStats: false,
+      usedAt: {
+        gte: periodStart,
+        lt: periodEnd,
+      },
+    },
+    select: {
+      type: true,
+      amount: true,
+      usedAt: true,
+      category: {
+        select: {
+          name: true,
+        },
+      },
+    },
+    orderBy: [{ usedAt: "asc" }, { id: "asc" }],
+  });
+  const report = buildLedgerAiSummarySnapshot({
+    analysisMode,
+    entries: entries.map((entry) => ({
+      type: entry.type,
+      amount: Number(entry.amount),
+      usedAt: entry.usedAt.toISOString(),
+      categoryName: entry.category?.name ?? null,
+    })),
+    budgetPlans: currentBudgetResult.period.plans.map((plan) => ({
+      type: plan.type,
+      allocations: plan.allocations.map((allocation) => ({
+        categoryName: allocation.category.name,
+        plannedAmount: Number(allocation.plannedAmount),
+        isFixed: allocation.isFixed,
+      })),
+    })),
+    selectedFilter,
+    periodLabel: getLedgerPeriodLabel(periodStart, periodEnd),
+    periodStart,
+    periodEnd,
+  });
+
+  if (report.entryCount <= 0) {
+    return {
+      requestKey,
+      error: "분석할 내역이 아직 없어요.",
+    } satisfies LedgerStatsAiActionData;
+  }
+
+  const reportJson = JSON.stringify(report);
+  if (reportJson.length > LEDGER_AI_SNAPSHOT_MAX_LENGTH) {
+    return {
+      requestKey,
+      error: "AI에 보낼 통계 요약이 너무 커요. 필터를 좁히고 다시 시도해 주세요.",
+    } satisfies LedgerStatsAiActionData;
+  }
+
+  const summary = await generateLedgerStatsSummary(report);
+  if (!summary) {
+    return {
+      requestKey,
+      report,
+      error: "Gemini 요약을 만들지 못했어요. 잠시 후 다시 시도해 주세요.",
+    } satisfies LedgerStatsAiActionData;
+  }
+
+  return {
+    requestKey,
+    report,
+    summary,
+    generatedAt: new Date().toISOString(),
+  } satisfies LedgerStatsAiActionData;
+};
+
+export function shouldRevalidate({ formData, defaultShouldRevalidate }: ShouldRevalidateFunctionArgs) {
+  if (formData?.get("intent") === "generate_ai_summary" || formData?.get("intent") === "ask_purchase_advice") {
+    return false;
+  }
+
+  return defaultShouldRevalidate;
+}
 
 export default function LedgerStatsPage() {
   const {
@@ -907,6 +1650,7 @@ export default function LedgerStatsPage() {
 
     return items;
   }, [comparisonCards, netResult, previousNetResult, selectedFilter]);
+  const aiSummaryFetcher = useFetcher<LedgerStatsAiActionData>();
 
   const categorySections = useMemo(() => {
     const visibleTypes: LedgerEntryTypeValue[] =
@@ -1071,6 +1815,7 @@ export default function LedgerStatsPage() {
   const [tagTypeTab, setTagTypeTab] = useState<LedgerEntryTypeValue>("EXPENSE");
   const [selectedTagCategoryIds, setSelectedTagCategoryIds] = useState<number[]>([]);
   const [tagMetric, setTagMetric] = useState<TagMetricValue>("COUNT");
+  const [aiAnalysisMode, setAiAnalysisMode] = useState<LedgerAiAnalysisMode>("OVERVIEW");
   const activeCategorySection = useMemo(() => {
     if (selectedFilter !== "ALL") {
       return categorySections[0] ?? null;
@@ -1149,7 +1894,7 @@ export default function LedgerStatsPage() {
           : right.count - left.count || right.linkedAmount - left.linkedAmount,
       );
   }, [rawTagStats, tagMetric]);
-  const categoryBudgetSections = useMemo(() => {
+  const categoryBudgetSections = useMemo<CategoryBudgetUsageSection[]>(() => {
     const totalsByType = new Map<LedgerEntryTypeValue, Map<number, CategoryBudgetUsageItem>>();
 
     for (const period of budgetPeriods) {
@@ -1399,6 +2144,30 @@ export default function LedgerStatsPage() {
       },
     ];
   }, [activeMonthlyGoalBudgetCard?.target, categoryBudgetSections, entries, monthlyGoalFocusType, selectedFilter, statsRangeLabel]);
+  const selectedAiAnalysisMode = getLedgerAiAnalysisModeOption(aiAnalysisMode);
+  const aiSummaryRequestKey = useMemo(
+    () => buildLedgerAiRequestKey(monthToken, selectedFilter, aiAnalysisMode),
+    [monthToken, selectedFilter, aiAnalysisMode],
+  );
+  const aiSummaryData = aiSummaryFetcher.data?.requestKey === aiSummaryRequestKey ? aiSummaryFetcher.data : null;
+  const isAiSummaryLoading =
+    aiSummaryFetcher.state !== "idle" &&
+    aiSummaryFetcher.formData?.get("intent") === "generate_ai_summary" &&
+    aiSummaryFetcher.formData?.get("monthToken") === monthToken &&
+    String(aiSummaryFetcher.formData?.get("type") ?? "ALL") === selectedFilter &&
+    String(aiSummaryFetcher.formData?.get("analysisMode") ?? "OVERVIEW") === aiAnalysisMode;
+  const canRequestAiSummary = filteredEntries.length > 0;
+  const requestAiSummary = () => {
+    aiSummaryFetcher.submit(
+      {
+        intent: "generate_ai_summary",
+        monthToken,
+        type: selectedFilter,
+        analysisMode: aiAnalysisMode,
+      },
+      { method: "post" },
+    );
+  };
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -1597,6 +2366,51 @@ export default function LedgerStatsPage() {
 
         {statsTab === "ANALYSIS" ? (
           <>
+            <StatSection title="Gemini 기간 정리" description="버튼을 누를 때만 Gemini로 최신 기간 데이터를 정리해요.">
+              <div className="mb-4 grid gap-2 md:grid-cols-3">
+                {LEDGER_AI_ANALYSIS_MODES.map((mode) => {
+                  const isActive = mode.id === aiAnalysisMode;
+
+                  return (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      onClick={() => setAiAnalysisMode(mode.id)}
+                      className={cn(
+                        "rounded-xl border px-3 py-3 text-left transition-colors",
+                        isActive
+                          ? "border-amber-300 bg-amber-50 text-slate-900 shadow-sm"
+                          : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-white",
+                      )}
+                    >
+                      <p className="text-[0.76rem] font-semibold">{mode.label}</p>
+                      <p className="mt-1 text-[0.66rem] leading-5 text-slate-500">{mode.description}</p>
+                    </button>
+                  );
+                })}
+              </div>
+              <LedgerAiSummaryCard
+                analysisMode={selectedAiAnalysisMode}
+                report={aiSummaryData?.report ?? null}
+                summary={aiSummaryData?.summary ?? null}
+                error={aiSummaryData?.error ?? null}
+                generatedAt={aiSummaryData?.generatedAt ?? null}
+                isLoading={isAiSummaryLoading}
+                canRequest={canRequestAiSummary}
+                onRefresh={requestAiSummary}
+              />
+              <div className="mt-4">
+                <CategoryBudgetQuestionBox sections={categoryBudgetSections} selectedFilterLabel={selectedFilterLabel} />
+              </div>
+              <div className="mt-4">
+                <PurchaseBudgetAdviceBox
+                  monthToken={monthToken}
+                  selectedFilter={selectedFilter}
+                  sections={categoryBudgetSections}
+                />
+              </div>
+            </StatSection>
+
             <StatSection title="카테고리별">
               {selectedFilter === "ALL" && categorySections.length > 0 ? (
                 <div className="mb-4 grid grid-cols-3 overflow-hidden rounded-xl bg-slate-100 p-1">
@@ -1998,6 +2812,980 @@ function StatSection({
       </div>
       {children}
     </section>
+  );
+}
+
+function LedgerAiSummaryCard({
+  analysisMode,
+  report,
+  summary,
+  error,
+  generatedAt,
+  isLoading,
+  canRequest,
+  onRefresh,
+}: {
+  analysisMode: LedgerAiAnalysisModeOption;
+  report: LedgerAiSummarySnapshot | null;
+  summary: LedgerAiSummaryResult | null;
+  error: string | null;
+  generatedAt: string | null;
+  isLoading: boolean;
+  canRequest: boolean;
+  onRefresh: () => void;
+}) {
+  if (!canRequest) {
+    return <EmptyState message="분석할 내역이 아직 없어요. 내역이 쌓이면 Gemini 요약도 같이 보여드릴게요." />;
+  }
+
+  if (!report && isLoading) {
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-sky-50 px-4 py-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[0.84rem] font-semibold text-slate-900">{analysisMode.label} 정리 중</p>
+            <p className="mt-1 text-[0.72rem] text-slate-500">예산 기간의 최신 흐름을 {analysisMode.label} 관점으로 다시 읽고 있어요.</p>
+          </div>
+          <div className="h-9 w-9 shrink-0 animate-spin rounded-full border-2 border-amber-300 border-t-transparent" />
+        </div>
+        <div className="mt-4 space-y-2">
+          <div className="h-3 w-full rounded-full bg-white/80" />
+          <div className="h-3 w-5/6 rounded-full bg-white/80" />
+          <div className="h-3 w-2/3 rounded-full bg-white/80" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!report && error) {
+    return (
+      <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4">
+        <p className="text-[0.84rem] font-semibold text-rose-600">AI 정리를 만들지 못했어요</p>
+        <p className="mt-1 text-[0.74rem] text-rose-500">{error}</p>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="mt-3 rounded-full border border-rose-200 bg-white px-3 py-1.5 text-[0.72rem] font-medium text-rose-600 transition-colors hover:bg-rose-100"
+        >
+          다시 생성
+        </button>
+      </div>
+    );
+  }
+
+  if (!report) {
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-sky-50 px-4 py-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[0.84rem] font-semibold text-slate-900">{analysisMode.label} 생성하기</p>
+            <p className="mt-1 text-[0.72rem] text-slate-500">{analysisMode.description} 최신 내역은 버튼을 누를 때만 읽어요.</p>
+          </div>
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="shrink-0 rounded-full bg-slate-900 px-3 py-1.5 text-[0.72rem] font-medium text-white transition-colors hover:bg-slate-700"
+          >
+            Gemini 분석 생성
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const generatedLabel = generatedAt
+    ? new Intl.DateTimeFormat("ko-KR", {
+        month: "numeric",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(new Date(generatedAt))
+    : null;
+  const dailyNoteByDate = new Map(summary?.dailyNotes.map((item) => [item.dateToken, item.note]) ?? []);
+  const categoryNoteByKey = new Map(summary?.categoryNotes.map((item) => [`${item.typeLabel}:${item.categoryName}`, item.note]) ?? []);
+  const visibleCategorySections = report.categorySections.filter((section) => section.items.length > 0);
+
+  return (
+    <div className="rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-sky-50 px-4 py-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-[0.84rem] font-semibold text-slate-900">{report.periodLabel}</p>
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[0.64rem] font-semibold text-amber-700">
+              {report.analysisModeLabel}
+            </span>
+          </div>
+          <p className="mt-1 text-[0.72rem] text-slate-500">
+            {report.periodStartDate} ~ {report.periodEndDate} · {report.focusLabel} {report.entryCount}건
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={isLoading}
+          className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[0.72rem] font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50"
+        >
+          {isLoading ? "정리 중" : "Gemini로 다시 정리"}
+        </button>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+        {[
+          { label: "수입", amount: report.totals.income, className: "text-sky-600" },
+          { label: "지출", amount: report.totals.expense, className: "text-rose-500" },
+          { label: "저축", amount: report.totals.saving, className: "text-emerald-600" },
+          { label: "남은 돈", amount: report.totals.net, className: report.totals.net >= 0 ? "text-sky-600" : "text-rose-500" },
+        ].map((item) => (
+          <div key={item.label} className="rounded-xl bg-white/90 px-3 py-3 shadow-sm">
+            <p className="text-[0.68rem] text-slate-400">{item.label}</p>
+            <p className={cn("mt-1 text-[0.82rem] font-semibold", item.className)}>
+              {item.label === "남은 돈" ? formatSignedLedgerAmount(item.amount) : formatLedgerAmount(item.amount)}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {summary?.overview ? (
+        <div className="mt-4 rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+          <p className="text-[0.88rem] leading-6 text-slate-700">{summary.overview}</p>
+        </div>
+      ) : null}
+
+      {summary && summary.insightCards.length > 0 ? (
+        <div className="mt-4 grid gap-2 md:grid-cols-2">
+          {summary.insightCards.map((card) => {
+            const tone = getLedgerAiInsightToneClasses(card.tone);
+
+            return (
+              <div key={`${card.title}-${card.detail}`} className={cn("rounded-2xl border px-4 py-3", tone.cardClassName)}>
+                <div className="flex items-start gap-2">
+                  <span className={cn("mt-1 h-2 w-2 shrink-0 rounded-full", tone.dotClassName)} />
+                  <div>
+                    <p className={cn("text-[0.76rem] font-semibold", tone.titleClassName)}>{card.title}</p>
+                    <p className="mt-1 text-[0.7rem] leading-5 text-slate-600">{card.detail}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
+      <LedgerAiModeSupportSections report={report} />
+
+      <div className="mt-4 rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[0.76rem] font-semibold text-slate-800">날짜별 정리</p>
+          <p className="text-[0.68rem] text-slate-400">{report.dailyRows.length}일</p>
+        </div>
+        <div className="mt-3 space-y-2">
+          {report.dailyRows.map((row) => {
+            const note = dailyNoteByDate.get(row.dateToken);
+
+            return (
+              <div key={row.dateToken} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[0.78rem] font-semibold text-slate-800">{row.dateLabel}</p>
+                    <p className="mt-0.5 text-[0.62rem] text-slate-400">
+                      {row.periodSegment} · {row.dayIndex}일차 · 누적 {formatSignedLedgerAmount(row.cumulativeNet)}
+                    </p>
+                  </div>
+                  <p className={cn("text-[0.72rem] font-semibold", row.net >= 0 ? "text-sky-600" : "text-rose-500")}>
+                    {formatSignedLedgerAmount(row.net)}
+                  </p>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-1.5">
+                  <p className="rounded-lg bg-white px-2 py-1 text-[0.66rem] text-sky-600">수입 {formatLedgerAmount(row.income)}</p>
+                  <p className="rounded-lg bg-white px-2 py-1 text-[0.66rem] text-rose-500">지출 {formatLedgerAmount(row.expense)}</p>
+                  <p className="rounded-lg bg-white px-2 py-1 text-[0.66rem] text-emerald-600">저축 {formatLedgerAmount(row.saving)}</p>
+                </div>
+                {row.categories.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {row.categories.slice(0, 4).map((category) => (
+                      <span key={`${row.dateToken}-${category.typeLabel}-${category.categoryName}`} className="rounded-full bg-white px-2 py-1 text-[0.62rem] text-slate-500">
+                        {category.typeLabel} · {category.categoryName} {formatLedgerAmount(category.amount)}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {note ? <p className="mt-2 text-[0.7rem] leading-5 text-slate-500">{note}</p> : null}
+              </div>
+            );
+          })}
+          {report.dailyRows.length === 0 ? <EmptyState message="이 기간에는 정리할 날짜별 내역이 없습니다." /> : null}
+        </div>
+      </div>
+
+      {visibleCategorySections.length > 0 ? (
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          {visibleCategorySections.map((section) => (
+            <div key={section.type} className="rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[0.76rem] font-semibold text-slate-800">{section.typeLabel} 카테고리</p>
+                <p className="text-[0.68rem] text-slate-400">{formatLedgerAmount(section.totalAmount)}</p>
+              </div>
+              <div className="mt-3 space-y-2">
+                {section.items.map((item) => {
+                  const note = categoryNoteByKey.get(`${section.typeLabel}:${item.categoryName}`);
+
+                  return (
+                    <div key={`${section.type}-${item.categoryName}`} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-[0.72rem] font-medium text-slate-700">{item.categoryName}</p>
+                          <p className="mt-0.5 text-[0.62rem] text-slate-400">{item.count}건 · {item.percent}%</p>
+                        </div>
+                        <p className="shrink-0 text-[0.72rem] font-semibold text-slate-800">{formatLedgerAmount(item.amount)}</p>
+                      </div>
+                      {note ? <p className="mt-1.5 text-[0.66rem] leading-5 text-slate-500">{note}</p> : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {summary && summary.actions.length > 0 ? (
+        <div className="mt-4 rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+          <p className="text-[0.76rem] font-semibold text-slate-800">다음 액션</p>
+          <div className="mt-3 space-y-2">
+            {summary.actions.map((item) => (
+              <div key={item} className="flex items-start gap-2">
+                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
+                <p className="text-[0.74rem] leading-5 text-slate-600">{item}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[0.74rem] text-slate-600">{summary?.closing ?? "정확한 금액은 현재 저장된 내역 기준으로 계산했어요."}</p>
+        <p className="text-[0.68rem] text-slate-400">
+          {isLoading ? "다시 읽는 중..." : generatedLabel ? `${generatedLabel} 생성` : "방금 생성"}
+        </p>
+      </div>
+
+      {error ? <p className="mt-2 text-[0.68rem] text-rose-500">{error}</p> : null}
+    </div>
+  );
+}
+
+function getLedgerAiInsightToneClasses(tone: LedgerAiSummaryResult["insightCards"][number]["tone"]) {
+  if (tone === "POSITIVE") {
+    return {
+      cardClassName: "border-emerald-100 bg-emerald-50/80",
+      dotClassName: "bg-emerald-400",
+      titleClassName: "text-emerald-700",
+    };
+  }
+
+  if (tone === "CAUTION") {
+    return {
+      cardClassName: "border-rose-100 bg-rose-50/80",
+      dotClassName: "bg-rose-400",
+      titleClassName: "text-rose-600",
+    };
+  }
+
+  return {
+    cardClassName: "border-slate-100 bg-white/90",
+    dotClassName: "bg-slate-300",
+    titleClassName: "text-slate-700",
+  };
+}
+
+function getBudgetCompareStatus(
+  type: LedgerAiSummarySnapshot["budgetCategorySections"][number]["type"],
+  item: LedgerAiSummarySnapshot["budgetCategorySections"][number]["items"][number],
+) {
+  if (!item.hasBudget) {
+    return {
+      label: "예산 없음",
+      className: "text-slate-500",
+    };
+  }
+
+  if (type === "EXPENSE") {
+    if (item.actualAmount > item.plannedAmount) {
+      return {
+        label: "초과",
+        className: "text-rose-500",
+      };
+    }
+
+    if (item.progressPercent >= 80) {
+      return {
+        label: "위험",
+        className: "text-amber-600",
+      };
+    }
+
+    return {
+      label: "여유",
+      className: "text-emerald-600",
+    };
+  }
+
+  if (item.actualAmount >= item.plannedAmount) {
+    return {
+      label: "달성",
+      className: "text-emerald-600",
+    };
+  }
+
+  if (item.progressPercent >= 80) {
+    return {
+      label: "근접",
+      className: "text-sky-600",
+    };
+  }
+
+  return {
+    label: "진행",
+    className: "text-slate-500",
+  };
+}
+
+function LedgerAiModeSupportSections({ report }: { report: LedgerAiSummarySnapshot }) {
+  if (report.analysisMode === "BUDGET_COMPARE") {
+    const visibleBudgetSections = report.budgetCategorySections.filter((section) => section.items.length > 0);
+
+    if (visibleBudgetSections.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="mt-4 grid gap-3 md:grid-cols-3">
+        {visibleBudgetSections.map((section) => (
+          <div key={section.type} className="rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+            <p className="text-[0.76rem] font-semibold text-slate-800">{section.typeLabel} 예산 비교</p>
+            <div className="mt-3 space-y-2">
+              {section.items.slice(0, 6).map((item) => {
+                const status = getBudgetCompareStatus(section.type, item);
+
+                return (
+                  <div key={`${section.type}-${item.categoryName}`} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-[0.72rem] font-medium text-slate-700">
+                          {item.categoryName}
+                          {item.isFixed ? <span className="ml-1 text-[0.6rem] text-slate-400">고정</span> : null}
+                        </p>
+                        <p className="mt-0.5 text-[0.62rem] text-slate-400">
+                          실제 {formatLedgerAmount(item.actualAmount)} / 예산 {formatLedgerAmount(item.plannedAmount)}
+                        </p>
+                      </div>
+                      <p className={cn("shrink-0 text-[0.68rem] font-semibold", status.className)}>{status.label}</p>
+                    </div>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white">
+                      <div
+                        className={cn(
+                          "h-full rounded-full",
+                          section.type === "EXPENSE" && item.actualAmount > item.plannedAmount ? "bg-rose-400" : "bg-amber-300",
+                        )}
+                        style={{ width: `${clampPercent(item.progressPercent)}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (report.analysisMode === "LIFE_PATTERN") {
+    if (report.weekdaySummary.length === 0 && report.periodSegments.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <div className="rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+          <p className="text-[0.76rem] font-semibold text-slate-800">요일별 흐름</p>
+          <div className="mt-3 space-y-2">
+            {report.weekdaySummary.map((item) => (
+              <div key={item.weekdayLabel} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2">
+                <p className="text-[0.72rem] font-medium text-slate-700">{item.weekdayLabel}요일</p>
+                <p className="text-[0.68rem] text-slate-500">
+                  지출 {formatLedgerAmount(item.expense)} · {item.entryCount}건
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+          <p className="text-[0.76rem] font-semibold text-slate-800">기간 초중후반</p>
+          <div className="mt-3 space-y-2">
+            {report.periodSegments.map((item) => (
+              <div key={item.segmentLabel} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2">
+                <p className="text-[0.72rem] font-medium text-slate-700">{item.segmentLabel}</p>
+                <p className={cn("text-[0.68rem] font-medium", item.net >= 0 ? "text-sky-600" : "text-rose-500")}>
+                  {formatSignedLedgerAmount(item.net)}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (report.analysisMode === "SAVING_POINTS") {
+    if (report.recurringExpenseCandidates.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="mt-4 rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+        <p className="text-[0.76rem] font-semibold text-slate-800">반복 지출 후보</p>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {report.recurringExpenseCandidates.map((item) => (
+            <div key={item.categoryName} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <p className="truncate text-[0.72rem] font-medium text-slate-700">{item.categoryName}</p>
+                <p className="shrink-0 text-[0.72rem] font-semibold text-rose-500">{formatLedgerAmount(item.amount)}</p>
+              </div>
+              <p className="mt-0.5 text-[0.62rem] text-slate-400">{item.count}번 반복됨</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (report.analysisMode === "CASH_FLOW") {
+    const lastDailyRow = report.dailyRows[report.dailyRows.length - 1] ?? null;
+
+    return (
+      <div className="mt-4 grid gap-2 md:grid-cols-3">
+        <div className="rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+          <p className="text-[0.68rem] text-slate-400">지출률</p>
+          <p className="mt-1 text-[0.9rem] font-semibold text-rose-500">{report.totals.expenseRatePercent}%</p>
+          <p className="mt-1 text-[0.66rem] text-slate-500">수입 대비 지출</p>
+        </div>
+        <div className="rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+          <p className="text-[0.68rem] text-slate-400">저축률</p>
+          <p className="mt-1 text-[0.9rem] font-semibold text-emerald-600">{report.totals.savingRatePercent}%</p>
+          <p className="mt-1 text-[0.66rem] text-slate-500">수입 대비 저축</p>
+        </div>
+        <div className="rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+          <p className="text-[0.68rem] text-slate-400">누적 남은 돈</p>
+          <p className={cn("mt-1 text-[0.9rem] font-semibold", report.totals.net >= 0 ? "text-sky-600" : "text-rose-500")}>
+            {formatSignedLedgerAmount(lastDailyRow?.cumulativeNet ?? report.totals.net)}
+          </p>
+          <p className="mt-1 text-[0.66rem] text-slate-500">마지막 입력일 기준</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (report.analysisMode === "CATEGORY_REPORT") {
+    const topCategoryItems = report.categorySections
+      .flatMap((section) =>
+        section.items.slice(0, 3).map((item) => ({
+          ...item,
+          typeLabel: section.typeLabel,
+        })),
+      )
+      .slice(0, 6);
+
+    if (topCategoryItems.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="mt-4 rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+        <p className="text-[0.76rem] font-semibold text-slate-800">우선 점검 카테고리</p>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {topCategoryItems.map((item) => (
+            <div key={`${item.typeLabel}-${item.categoryName}`} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <p className="truncate text-[0.72rem] font-medium text-slate-700">
+                  {item.typeLabel} · {item.categoryName}
+                </p>
+                <p className="shrink-0 text-[0.72rem] font-semibold text-slate-800">{formatLedgerAmount(item.amount)}</p>
+              </div>
+              <p className="mt-0.5 text-[0.62rem] text-slate-400">{item.count}건 · {item.percent}%</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (report.notableDays.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-4 rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+      <p className="text-[0.76rem] font-semibold text-slate-800">특이한 날짜</p>
+      <div className="mt-3 grid gap-2 md:grid-cols-3">
+        {report.notableDays.map((item) => (
+          <div key={`${item.reason}-${item.dateToken}`} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+            <p className="text-[0.72rem] font-medium text-slate-700">{item.reason}</p>
+            <p className="mt-1 text-[0.68rem] text-slate-500">{item.dateLabel}</p>
+            <p className="mt-1 text-[0.72rem] font-semibold text-slate-800">{formatLedgerAmount(item.amount)}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type CategoryBudgetQuestionItem = {
+  type: LedgerEntryTypeValue;
+  typeLabel: string;
+  label: string;
+  plannedAmount: number;
+  actualAmount: number;
+  remainingAmount: number;
+  progressRaw: number;
+  progressValue: number;
+  isFixed: boolean;
+};
+
+function normalizeBudgetQuestionText(value: string) {
+  return value.toLowerCase().replace(/[^0-9a-z가-힣]/g, "");
+}
+
+function getCategoryBudgetQuestionScore(question: string, itemLabel: string) {
+  const compactQuestion = normalizeBudgetQuestionText(question);
+  const compactLabel = normalizeBudgetQuestionText(itemLabel);
+  const labelParts = itemLabel
+    .split(/[\\/,\s._-]+/)
+    .map(normalizeBudgetQuestionText)
+    .filter((part) => part.length >= 2);
+
+  if (!compactQuestion || !compactLabel) {
+    return 0;
+  }
+
+  if (compactQuestion.includes(compactLabel)) {
+    return 100;
+  }
+
+  if (compactLabel.includes(compactQuestion) && compactQuestion.length >= 2) {
+    return 85;
+  }
+
+  const matchingPart = labelParts.find((part) => compactQuestion.includes(part) || part.includes(compactQuestion));
+  if (matchingPart) {
+    return 70 + Math.min(matchingPart.length, 10);
+  }
+
+  return 0;
+}
+
+function getBudgetQuestionResultLabel(item: CategoryBudgetQuestionItem) {
+  if (item.type === "EXPENSE") {
+    return item.remainingAmount >= 0
+      ? {
+          title: `${formatLedgerAmount(item.remainingAmount)} 남았어요.`,
+          className: "text-slate-900",
+          description: "지출 예산에서 아직 쓸 수 있는 금액이에요.",
+        }
+      : {
+          title: `${formatLedgerAmount(Math.abs(item.remainingAmount))} 초과했어요.`,
+          className: "text-rose-500",
+          description: "이 카테고리는 이미 예산을 넘겼어요.",
+        };
+  }
+
+  if (item.remainingAmount > 0) {
+    return {
+      title: `${formatLedgerAmount(item.remainingAmount)} 더 필요해요.`,
+      className: "text-amber-600",
+      description: `${item.typeLabel} 목표까지 남은 금액이에요.`,
+    };
+  }
+
+  return {
+    title: `${formatLedgerAmount(Math.abs(item.remainingAmount))} 초과 달성했어요.`,
+    className: "text-emerald-600",
+    description: `${item.typeLabel} 목표를 넘겼어요.`,
+  };
+}
+
+function CategoryBudgetQuestionBox({
+  sections,
+  selectedFilterLabel,
+}: {
+  sections: CategoryBudgetUsageSection[];
+  selectedFilterLabel: string;
+}) {
+  const [question, setQuestion] = useState("");
+  const budgetItems = useMemo(
+    () =>
+      sections.flatMap((section) =>
+        section.items.map((item) => ({
+          ...item,
+          type: section.type,
+          typeLabel: getTypeLabel(section.type),
+        })),
+      ),
+    [sections],
+  );
+  const trimmedQuestion = question.trim();
+  const matches = useMemo(
+    () =>
+      budgetItems
+        .map((item) => ({
+          item,
+          score: getCategoryBudgetQuestionScore(trimmedQuestion, item.label),
+        }))
+        .filter((match) => match.score > 0)
+        .sort((left, right) => right.score - left.score || right.item.plannedAmount - left.item.plannedAmount)
+        .slice(0, 3),
+    [budgetItems, trimmedQuestion],
+  );
+  const suggestions = useMemo(
+    () =>
+      budgetItems
+        .filter((item) => item.plannedAmount > 0)
+        .sort((left, right) => right.plannedAmount - left.plannedAmount || right.actualAmount - left.actualAmount)
+        .slice(0, 6),
+    [budgetItems],
+  );
+  const categoryNames = suggestions.map((item) => item.label).join(", ");
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[0.82rem] font-semibold text-slate-900">예산 빠른 질문</p>
+          <p className="mt-1 text-[0.7rem] text-slate-500">
+            AI 토큰 없이 {selectedFilterLabel} 카테고리 예산을 바로 찾아요. 예: 식비 얼마나 남았어?
+          </p>
+        </div>
+        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[0.64rem] font-medium text-slate-500">즉시 계산</span>
+      </div>
+
+      <div className="mt-3 flex gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 focus-within:border-amber-300 focus-within:bg-white">
+        <input
+          type="search"
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          placeholder={categoryNames ? `${suggestions[0]?.label ?? "식비"} 얼마나 남았어?` : "카테고리 예산을 먼저 설정해 주세요."}
+          className="min-w-0 flex-1 bg-transparent text-[0.8rem] text-slate-800 outline-none placeholder:text-slate-400"
+        />
+        {question ? (
+          <button
+            type="button"
+            onClick={() => setQuestion("")}
+            className="rounded-full px-2 text-[0.68rem] font-medium text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+          >
+            지우기
+          </button>
+        ) : null}
+      </div>
+
+      {suggestions.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {suggestions.map((item) => (
+            <button
+              key={`${item.type}-${item.label}`}
+              type="button"
+              onClick={() => setQuestion(`${item.label} 얼마나 남았어?`)}
+              className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[0.66rem] font-medium text-slate-500 transition-colors hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700"
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {budgetItems.length === 0 ? (
+        <div className="mt-3">
+          <EmptyState message="아직 질문할 수 있는 카테고리 예산이 없습니다." />
+        </div>
+      ) : trimmedQuestion ? (
+        matches.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            {matches.map(({ item }) => {
+              const result = getBudgetQuestionResultLabel(item);
+
+              return (
+                <div key={`${item.type}-${item.label}`} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-[0.78rem] font-semibold text-slate-800">
+                        {item.typeLabel} · {item.label}
+                        {item.isFixed ? <span className="ml-1 text-[0.62rem] font-medium text-slate-400">고정</span> : null}
+                      </p>
+                      <p className="mt-1 text-[0.68rem] text-slate-500">{result.description}</p>
+                    </div>
+                    <p className={cn("shrink-0 text-right text-[0.82rem] font-semibold", result.className)}>{result.title}</p>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-1.5 text-[0.64rem]">
+                    <p className="rounded-lg bg-white px-2 py-1 text-slate-500">예산 {formatLedgerAmount(item.plannedAmount)}</p>
+                    <p className="rounded-lg bg-white px-2 py-1 text-slate-500">사용 {formatLedgerAmount(item.actualAmount)}</p>
+                    <p className="rounded-lg bg-white px-2 py-1 text-slate-500">진행 {item.progressRaw}%</p>
+                  </div>
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white">
+                    <div
+                      className={cn("h-full rounded-full", item.remainingAmount < 0 ? "bg-rose-400" : "bg-amber-300")}
+                      style={{ width: `${getAmountBarWidth(item.progressValue)}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="mt-3 rounded-xl bg-slate-50 px-3 py-3 text-[0.72rem] leading-5 text-slate-500">
+            이 질문에서 맞는 카테고리를 찾지 못했어요. 카테고리 이름을 조금 더 그대로 적어보면 잘 찾아요.
+          </div>
+        )
+      ) : null}
+    </div>
+  );
+}
+
+function getPurchaseAdviceVerdictTone(verdict: LedgerPurchaseAdviceResult["verdict"]) {
+  if (verdict === "BUY") {
+    return {
+      label: "구매 가능",
+      badgeClassName: "bg-emerald-100 text-emerald-700",
+      titleClassName: "text-emerald-700",
+      dotClassName: "bg-emerald-400",
+    };
+  }
+
+  if (verdict === "WAIT") {
+    return {
+      label: "보류 추천",
+      badgeClassName: "bg-rose-100 text-rose-600",
+      titleClassName: "text-rose-600",
+      dotClassName: "bg-rose-400",
+    };
+  }
+
+  if (verdict === "ADJUST") {
+    return {
+      label: "조정 추천",
+      badgeClassName: "bg-amber-100 text-amber-700",
+      titleClassName: "text-amber-700",
+      dotClassName: "bg-amber-400",
+    };
+  }
+
+  return {
+    label: "확인 필요",
+    badgeClassName: "bg-slate-100 text-slate-600",
+    titleClassName: "text-slate-700",
+    dotClassName: "bg-slate-300",
+  };
+}
+
+function PurchaseBudgetAdviceBox({
+  monthToken,
+  selectedFilter,
+  sections,
+}: {
+  monthToken: string;
+  selectedFilter: EntryFilterValue;
+  sections: CategoryBudgetUsageSection[];
+}) {
+  const adviceFetcher = useFetcher<LedgerPurchaseAdviceActionData>();
+  const [question, setQuestion] = useState("");
+  const trimmedQuestion = question.trim();
+  const requestPrefix = `${monthToken}:${selectedFilter}:`;
+  const adviceData = adviceFetcher.data?.requestKey.startsWith(requestPrefix) ? adviceFetcher.data : null;
+  const isLoading =
+    adviceFetcher.state !== "idle" &&
+    adviceFetcher.formData?.get("intent") === "ask_purchase_advice" &&
+    adviceFetcher.formData?.get("monthToken") === monthToken &&
+    String(adviceFetcher.formData?.get("type") ?? "ALL") === selectedFilter;
+  const exampleItems = useMemo(
+    () =>
+      sections
+        .flatMap((section) =>
+          section.items.map((item) => ({
+            ...item,
+            type: section.type,
+            typeLabel: getTypeLabel(section.type),
+          })),
+        )
+        .filter((item) => item.type === "EXPENSE" && item.plannedAmount > 0)
+        .sort((left, right) => right.remainingAmount - left.remainingAmount || right.plannedAmount - left.plannedAmount)
+        .slice(0, 4),
+    [sections],
+  );
+
+  const askAdvice = () => {
+    if (!trimmedQuestion || isLoading) {
+      return;
+    }
+
+    adviceFetcher.submit(
+      {
+        intent: "ask_purchase_advice",
+        monthToken,
+        type: selectedFilter,
+        question: trimmedQuestion,
+      },
+      { method: "post" },
+    );
+  };
+  const advice = adviceData?.advice ?? null;
+  const tone = advice ? getPurchaseAdviceVerdictTone(advice.verdict) : null;
+
+  return (
+    <div className="rounded-2xl border border-amber-200 bg-gradient-to-br from-white via-amber-50/70 to-sky-50 px-4 py-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[0.82rem] font-semibold text-slate-900">Gemini 구매 상담</p>
+          <p className="mt-1 text-[0.7rem] leading-5 text-slate-500">
+            사고 싶은 것과 예상 가격을 적으면 최신 예산 잔액과 비교해줘요.
+          </p>
+        </div>
+        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[0.64rem] font-medium text-amber-700">버튼 클릭 시 토큰 사용</span>
+      </div>
+
+      <form
+        className="mt-3 space-y-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          askAdvice();
+        }}
+      >
+        <textarea
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          rows={3}
+          placeholder="예: 운동화 8만원 사고 싶은데 이번 지출 예산에서 괜찮을까?"
+          className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-3 text-[0.8rem] leading-5 text-slate-800 outline-none transition-colors placeholder:text-slate-400 focus:border-amber-300"
+        />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-[0.66rem] text-slate-400">가격을 같이 적으면 판단이 훨씬 정확해져요.</p>
+          <button
+            type="submit"
+            disabled={!trimmedQuestion || isLoading}
+            className="rounded-full bg-slate-900 px-3 py-1.5 text-[0.72rem] font-medium text-white transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isLoading ? "상담 중" : "Gemini에게 물어보기"}
+          </button>
+        </div>
+      </form>
+
+      {exampleItems.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {exampleItems.map((item) => {
+            const exampleAmount = item.remainingAmount > 0 ? Math.min(item.remainingAmount, 50_000) : 10_000;
+
+            return (
+              <button
+                key={`${item.type}-${item.label}`}
+                type="button"
+                onClick={() => setQuestion(`${item.label}에서 ${formatLedgerAmount(exampleAmount)} 정도 쓰는 거 괜찮을까?`)}
+                className="rounded-full border border-amber-100 bg-white/80 px-2.5 py-1 text-[0.66rem] font-medium text-slate-500 transition-colors hover:bg-amber-50 hover:text-amber-700"
+              >
+                {item.label} 상담
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {isLoading ? (
+        <div className="mt-4 rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[0.76rem] font-semibold text-slate-800">예산이랑 비교하는 중</p>
+              <p className="mt-1 text-[0.68rem] text-slate-500">최신 카테고리 예산과 사용액을 같이 보고 있어요.</p>
+            </div>
+            <div className="h-8 w-8 shrink-0 animate-spin rounded-full border-2 border-amber-300 border-t-transparent" />
+          </div>
+        </div>
+      ) : null}
+
+      {!isLoading && adviceData?.error ? (
+        <div className="mt-4 rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3">
+          <p className="text-[0.76rem] font-semibold text-rose-600">상담을 만들지 못했어요</p>
+          <p className="mt-1 text-[0.7rem] leading-5 text-rose-500">{adviceData.error}</p>
+        </div>
+      ) : null}
+
+      {!isLoading && advice && tone ? (
+        <div className="mt-4 rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={cn("rounded-full px-2 py-0.5 text-[0.64rem] font-semibold", tone.badgeClassName)}>
+                  {tone.label}
+                </span>
+                {advice.matchedCategoryName ? (
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[0.64rem] font-medium text-slate-500">
+                    {advice.matchedCategoryName}
+                  </span>
+                ) : null}
+              </div>
+              <p className={cn("mt-2 text-[0.86rem] font-semibold", tone.titleClassName)}>{advice.title}</p>
+              <p className="mt-1 text-[0.74rem] leading-5 text-slate-600">{advice.summary}</p>
+            </div>
+            {advice.priceEstimate > 0 ? (
+              <div className="shrink-0 rounded-xl bg-slate-50 px-3 py-2 text-right">
+                <p className="text-[0.62rem] text-slate-400">예상 가격</p>
+                <p className="mt-0.5 text-[0.78rem] font-semibold text-slate-800">{formatLedgerAmount(advice.priceEstimate)}</p>
+              </div>
+            ) : null}
+          </div>
+
+          {advice.budgetImpact ? (
+            <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-[0.72rem] leading-5 text-slate-600">
+              {advice.budgetImpact}
+            </div>
+          ) : null}
+
+          {advice.reasons.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {advice.reasons.map((reason) => (
+                <div key={reason} className="flex items-start gap-2">
+                  <span className={cn("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", tone.dotClassName)} />
+                  <p className="text-[0.72rem] leading-5 text-slate-600">{reason}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {advice.suggestions.length > 0 ? (
+            <div className="mt-3 rounded-xl bg-amber-50/70 px-3 py-3">
+              <p className="text-[0.7rem] font-semibold text-amber-700">선택지</p>
+              <div className="mt-2 space-y-1.5">
+                {advice.suggestions.map((suggestion) => (
+                  <p key={suggestion} className="text-[0.7rem] leading-5 text-slate-600">
+                    {suggestion}
+                  </p>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[0.7rem] text-slate-500">{advice.closing}</p>
+            {adviceData?.generatedAt ? (
+              <p className="text-[0.64rem] text-slate-400">
+                {new Intl.DateTimeFormat("ko-KR", {
+                  month: "numeric",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                }).format(new Date(adviceData.generatedAt))}{" "}
+                상담
+              </p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
