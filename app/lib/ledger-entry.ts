@@ -8,6 +8,38 @@ export function formatLedgerAmount(amount: number) {
   return `${new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 0 }).format(amount)}원`;
 }
 
+export function parseLedgerBenefitTagAmount(tagName: string) {
+  const compactTagName = tagName.replace(/\s+/g, "");
+  if (!/(포인트|캐시|쿠폰|상품권|마일리지|적립금|페이|할인)/i.test(compactTagName)) {
+    return 0;
+  }
+
+  const match = compactTagName.match(/(\d[\d,]*(?:\.\d+)?)(만원|천원|원|만|천)?/);
+  if (!match) {
+    return 0;
+  }
+
+  const numericAmount = Number(match[1].replace(/,/g, ""));
+  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+    return 0;
+  }
+
+  const unit = match[2] ?? "";
+  if (unit === "만원" || unit === "만") {
+    return Math.round(numericAmount * 10_000);
+  }
+
+  if (unit === "천원" || unit === "천") {
+    return Math.round(numericAmount * 1_000);
+  }
+
+  return Math.round(numericAmount);
+}
+
+export function getLedgerBenefitTagAmount(tagNames: string[]) {
+  return tagNames.reduce((sum, tagName) => sum + parseLedgerBenefitTagAmount(tagName), 0);
+}
+
 export function getDateKey(date: Date) {
   const year = date.getFullYear();
   const month = `${date.getMonth() + 1}`.padStart(2, "0");
