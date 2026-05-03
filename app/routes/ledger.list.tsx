@@ -803,12 +803,7 @@ export default function LedgerListPage() {
                                 </p>
                                 {entry.amount === 0 ? (
                                   <p className="mt-1 rounded-full bg-amber-50 px-2 py-0.5 text-[0.58rem] font-medium text-amber-700">
-                                    0원 기록
-                                  </p>
-                                ) : null}
-                                {benefitTagAmount > 0 ? (
-                                  <p className="mt-1 text-[0.62rem] font-semibold text-slate-500">
-                                    표시가 {formatLedgerAmount(benefitTagAmount)}
+                                    {benefitTagAmount > 0 ? formatLedgerAmount(benefitTagAmount) : "0원"}
                                   </p>
                                 ) : null}
                               </div>
