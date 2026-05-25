@@ -6,6 +6,7 @@ import { LockedSpaceScreen, SpaceExperience } from "~/components/space/SpaceExpe
 import { getSession } from "~/lib/auth.server";
 import { spaceUnlockCookie } from "~/lib/cookies.server";
 import { db } from "~/lib/db.server";
+import { getPublicOrigin, getSpaceShareMeta } from "~/lib/space-meta";
 import { DEFAULT_SPACE_THEME_KEY, isSpaceThemeKey, type SpaceAlbumPage, type SpacePostForTheme } from "~/lib/space-theme";
 import { applySpaceTheme, canChangeSpaceTheme } from "~/lib/space-theme.server";
 
@@ -252,6 +253,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   }
 
   return {
+    origin: getPublicOrigin(request),
     isAdmin,
     isOwner,
     isDatePassed,
@@ -264,6 +266,19 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     initialPosts,
     initialAlbumPage,
   };
+}
+
+export function meta({ data }: { data?: Awaited<ReturnType<typeof loader>> }) {
+  const space = data && "space" in data ? data.space : null;
+  const title = "소중한 마음들이 도착했어요";
+  const description = "친구들이 남긴 쪽지와 사진을 테마 공간에서 천천히 확인해보세요.";
+
+  return getSpaceShareMeta({
+    origin: data && "origin" in data ? data.origin : "https://www.tcroom.kr",
+    path: `/space/${space?.id || ""}`,
+    title,
+    description,
+  });
 }
 
 export default function SpaceMain() {
