@@ -14,3 +14,12 @@ export const myPostsCookie = createCookie("my-posts", {
   secure: process.env.NODE_ENV === "production",
   secrets: [COOKIE_SECRET],
 });
+
+export const spaceUnlockCookie = createCookie("space-unlocks", {
+  maxAge: 60 * 60 * 24 * 30,
+  httpOnly: true,
+  path: "/",
+  sameSite: "lax",
+  secure: process.env.NODE_ENV === "production",
+  secrets: [COOKIE_SECRET],
+});

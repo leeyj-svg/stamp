@@ -6,14 +6,95 @@ const ENV_UPLOAD_URL = process.env.STORAGE_SERVER_URL || "";
 const INTERNAL_HOST = "http://192.168.0.200:4000";
 const PUBLIC_VIEW_ROOT = "https://img.tcroom.kr";
 interface ExifrOutput {
-  DateTimeOriginal?: Date | string;
-  CreateDate?: Date | string;
-  ModifyDate?: Date | string;
-  DateCreated?: Date | string; // XMP에서 주로 사용
-  DateTime?: Date | string;
+  DateTimeOriginal?: Date | string | number;
+  SubSecDateTimeOriginal?: Date | string | number;
+  CreateDate?: Date | string | number;
+  SubSecCreateDate?: Date | string | number;
+  ModifyDate?: Date | string | number;
+  DateCreated?: Date | string | number; // XMP에서 주로 사용
+  DateTime?: Date | string | number;
+  CreationDate?: Date | string | number;
+  MediaCreateDate?: Date | string | number;
   [key: string]: unknown;
 }
-export async function processAndUploadImage(file: File): Promise<{ url: string; takenAt: Date | null } | null> {
+
+type ProcessedImageUpload = {
+  url: string;
+  thumbnailUrl: string;
+  takenAt: Date | null;
+};
+
+function parseMetadataDate(value: unknown): Date | null {
+  if (!value) return null;
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  if (typeof value === "number") {
+    const timestamp = value > 1_000_000_000_000 ? value : value * 1000;
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value
+      .trim()
+      .replace(/^(\d{4})[:.](\d{2})[:.](\d{2})/, "$1-$2-$3")
+      .replace(" ", "T");
+    const date = new Date(normalized);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  return null;
+}
+
+function parseFilenameDate(filename: string): Date | null {
+  const match = filename.match(/(?:^|[_-])(?<date>(?:19|20)\d{6})[_-](?<time>\d{6})(?<millis>\d{1,3})?(?:[_-]|\.|$)/);
+  const datePart = match?.groups?.date;
+  const timePart = match?.groups?.time;
+  if (!datePart || !timePart) return null;
+
+  const year = Number(datePart.slice(0, 4));
+  const month = Number(datePart.slice(4, 6));
+  const day = Number(datePart.slice(6, 8));
+  const hour = Number(timePart.slice(0, 2));
+  const minute = Number(timePart.slice(2, 4));
+  const second = Number(timePart.slice(4, 6));
+  const millis = Number((match.groups?.millis || "0").padEnd(3, "0"));
+
+  if (
+    month < 1 || month > 12 ||
+    day < 1 || day > 31 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    millis > 999
+  ) {
+    return null;
+  }
+
+  const isoString = `${datePart.slice(0, 4)}-${datePart.slice(4, 6)}-${datePart.slice(6, 8)}T${timePart.slice(0, 2)}:${timePart.slice(2, 4)}:${timePart.slice(4, 6)}.${String(millis).padStart(3, "0")}+09:00`;
+  const date = new Date(isoString);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+async function uploadImageBuffer(buffer: Buffer, filename: string) {
+  const formData = new FormData();
+  const blob = new Blob([new Uint8Array(buffer)], { type: "image/webp" });
+  formData.append("file", blob, filename);
+
+  const urlObj = new URL(ENV_UPLOAD_URL);
+  const { data } = await axios.post(`${INTERNAL_HOST}${urlObj.pathname}`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 60000,
+  });
+
+  if (!data.success) return null;
+  return `${PUBLIC_VIEW_ROOT}${data.url}`;
+}
+
+export async function processAndUploadImage(file: File): Promise<ProcessedImageUpload | null> {
   if (!file || file.size === 0) return null;
   if (!ENV_UPLOAD_URL) return null;
 
@@ -22,6 +103,7 @@ export async function processAndUploadImage(file: File): Promise<{ url: string; 
     const buffer = Buffer.from(arrayBuffer);
 
     let takenAt: Date | null = null;
+    let metadataKeys: string[] = [];
 
     // --- [Step 1] exifr로 메타데이터 추출 (PNG/XMP 지원) ---
     try {
@@ -29,42 +111,39 @@ export async function processAndUploadImage(file: File): Promise<{ url: string; 
       // mergeOutput: false로 하면 exif, xmp 등이 분리되지만, true(기본값)면 합쳐져서 찾기 편합니다.
       const metadata = await exifr.parse(buffer, {
         tiff: true,
-        xmp: true,  // ✨ PNG는 XMP에 날짜가 있을 확률이 높음
+        ifd0: {},
+        exif: true,
+        xmp: { parse: true, multiSegment: true },
         icc: false,
         iptc: true,
         jfif: true,
+        mergeOutput: true,
+        reviveValues: true,
+        firstChunkSize: 256 * 1024,
+        chunkLimit: 20,
       }) as ExifrOutput | undefined;
 
       if (metadata) {
+        metadataKeys = Object.keys(metadata);
 
         // 날짜 후보군 (우선순위 순)
         const candidates = [
           metadata.DateTimeOriginal,
+          metadata.SubSecDateTimeOriginal,
           metadata.CreateDate,
+          metadata.SubSecCreateDate,
           metadata.DateCreated, // XMP에서 날짜 저장하는 필드
+          metadata.CreationDate,
+          metadata.MediaCreateDate,
           metadata.DateTime,
           metadata.ModifyDate
         ];
 
         for (const dateRaw of candidates) {
-          if (!dateRaw) continue;
-
-          // exifr는 설정을 안 건드리면 Date 객체로 자동 변환해서 주는 경우가 많음
-          if (dateRaw instanceof Date) {
-            takenAt = dateRaw;
-            break;
-          }
-
-          // 문자열로 들어온 경우 파싱
-          if (typeof dateRaw === 'string') {
-            // ISO 포맷 변환 (2022:09:17 -> 2022-09-17)
-            const isoString = dateRaw.replace(/^(\d{4})[:.](\d{2})[:.](\d{2})/, '$1-$2-$3');
-            const parsedDate = new Date(isoString);
-            if (!isNaN(parsedDate.getTime())) {
-              takenAt = parsedDate;
-              break;
-            }
-          }
+          const parsedDate = parseMetadataDate(dateRaw);
+          if (!parsedDate) continue;
+          takenAt = parsedDate;
+          break;
         }
       } else {
         console.log("⚠️ [EXIF] 메타데이터가 발견되지 않음");
@@ -73,32 +152,41 @@ export async function processAndUploadImage(file: File): Promise<{ url: string; 
       console.warn(`⚠️ 메타데이터 파싱 실패: ${e instanceof Error ? e.message : String(e)}`);
     }
 
+    if (!takenAt) {
+      takenAt = parseFilenameDate(file.name || "");
+      if (takenAt) {
+        console.info(`📸 [EXIF] 촬영일 메타데이터 없음. 파일명 날짜를 사용합니다: ${file.name}`);
+      }
+    }
+
     // --- [Step 2] Fallback (파일 수정일) ---
     if (!takenAt) {
-      console.warn("⚠️ [최종 경고] 메타데이터 없음. 파일의 lastModified 사용.");
+      const keySummary = metadataKeys.length > 0 ? ` 감지된 키=${metadataKeys.join(",")}.` : "";
+      console.warn(`⚠️ [최종 경고] 촬영일 메타데이터 없음.${keySummary} 파일의 lastModified 사용.`);
       takenAt = new Date(file.lastModified || Date.now());
     }
 
     // --- [Step 3] 이미지 리사이징 및 업로드 (기존과 동일) ---
-    const optimizedBuffer = await sharp(buffer)
-      .rotate()
-      .resize({ width: 800, height: 800, fit: 'inside', withoutEnlargement: true })
-      .webp({ quality: 80 })
+    const image = sharp(buffer).rotate();
+    const fullBuffer = await image
+      .clone()
+      .resize({ width: 1200, height: 1200, fit: "inside", withoutEnlargement: true })
+      .webp({ quality: 82 })
+      .toBuffer();
+    const thumbnailBuffer = await image
+      .clone()
+      .resize({ width: 480, height: 480, fit: "inside", withoutEnlargement: true })
+      .webp({ quality: 76 })
       .toBuffer();
 
-    const filename = `image-${Date.now()}-${Math.round(Math.random() * 1E9)}.webp`;
-    const formData = new FormData();
-    const blob = new Blob([new Uint8Array(optimizedBuffer)], { type: 'image/webp' });
-    formData.append('file', blob, filename);
+    const nonce = `${Date.now()}-${Math.round(Math.random() * 1E9)}`;
+    const [url, thumbnailUrl] = await Promise.all([
+      uploadImageBuffer(fullBuffer, `image-${nonce}.webp`),
+      uploadImageBuffer(thumbnailBuffer, `image-${nonce}-thumb.webp`),
+    ]);
 
-    const urlObj = new URL(ENV_UPLOAD_URL);
-    const { data } = await axios.post(`${INTERNAL_HOST}${urlObj.pathname}`, formData, {
-      headers: { "Content-Type": "multipart/form-data" },
-      timeout: 60000
-    });
-
-    if (data.success) {
-      return { url: `${PUBLIC_VIEW_ROOT}${data.url}`, takenAt };
+    if (url) {
+      return { url, thumbnailUrl: thumbnailUrl ?? url, takenAt };
     }
     return null;
 
@@ -112,12 +200,12 @@ export async function processAndUploadImage(file: File): Promise<{ url: string; 
   }
 }
 // ... 나머지 함수들(uploadImages, deleteImage 등)은 그대로 두셔도 됩니다.
-export async function uploadImages(files: File[]): Promise<{ url: string; takenAt: Date | null }[]> {
+export async function uploadImages(files: File[]): Promise<ProcessedImageUpload[]> {
   const uploadPromises = files.map(file => processAndUploadImage(file));
   const results = await Promise.all(uploadPromises);
 
   // 결과가 null이 아닌 것만 필터링하고, 타입스크립트에게 구체적인 객체 형태임을 알려줍니다.
-return results.filter((result): result is { url: string; takenAt: Date | null } => result !== null);
+return results.filter((result): result is ProcessedImageUpload => result !== null);
 }
 
 export function isStorageUploadAvailable() {

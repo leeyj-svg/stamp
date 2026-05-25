@@ -12,6 +12,7 @@ import {
   Package,
   ShieldCheck,
   Smartphone,
+  Sparkles,
   Ticket,
   User,
   Users,
@@ -159,6 +160,11 @@ function SidebarNav({ inSheet, isAdmin }: { inSheet: boolean; isAdmin: boolean }
 
       {isAdmin && (
         <>
+          <NavLinkWrapper asChild>
+            <Link to="/admin/spaces" className="flex items-center gap-3 rounded-lg px-3 py-2 text-muted-foreground transition-all hover:text-primary">
+              <Sparkles className="h-4 w-4" /> SPACE 관리
+            </Link>
+          </NavLinkWrapper>
           <NavLinkWrapper asChild>
             <Link to="/admin/categories/managers" className="flex items-center gap-3 rounded-lg px-3 py-2 text-muted-foreground transition-all hover:text-primary">
               <ShieldCheck className="h-4 w-4" /> 카테고리 운영진

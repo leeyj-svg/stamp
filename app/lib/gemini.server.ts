@@ -1,6 +1,8 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
 import type {
+  LedgerGeneralQuestionResult,
+  LedgerGeneralQuestionSnapshot,
   LedgerAiSummaryResult,
   LedgerAiSummarySnapshot,
   LedgerPurchaseAdviceResult,
@@ -169,6 +171,25 @@ const ledgerPurchaseAdviceSchema = {
     "suggestions",
     "closing",
   ],
+} as const;
+
+const ledgerGeneralQuestionSchema = {
+  type: Type.OBJECT,
+  properties: {
+    title: { type: Type.STRING },
+    answer: { type: Type.STRING },
+    highlights: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
+    actions: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
+    caution: { type: Type.STRING },
+    closing: { type: Type.STRING },
+  },
+  required: ["title", "answer", "highlights", "actions", "caution", "closing"],
 } as const;
 
 export function hasGeminiApiKey() {
@@ -415,6 +436,44 @@ function sanitizeLedgerPurchaseAdvice(value: unknown): LedgerPurchaseAdviceResul
   };
 }
 
+function sanitizeLedgerGeneralQuestion(value: unknown): LedgerGeneralQuestionResult | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = value as Partial<LedgerGeneralQuestionResult>;
+  if (
+    typeof candidate.title !== "string" ||
+    typeof candidate.answer !== "string" ||
+    !Array.isArray(candidate.highlights) ||
+    !Array.isArray(candidate.actions) ||
+    typeof candidate.caution !== "string" ||
+    typeof candidate.closing !== "string"
+  ) {
+    return null;
+  }
+
+  const highlights = candidate.highlights
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  const actions = candidate.actions
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+
+  return {
+    title: candidate.title.trim(),
+    answer: candidate.answer.trim(),
+    highlights,
+    actions,
+    caution: candidate.caution.trim(),
+    closing: candidate.closing.trim(),
+  };
+}
+
 export async function generateAiMessages(
   topic: string,
   count: number,
@@ -627,6 +686,59 @@ ${JSON.stringify(snapshot, null, 2)}
     return sanitizeLedgerPurchaseAdvice(parsed);
   } catch (error) {
     console.error("Gemini ledger purchase advice error:", error);
+    return null;
+  }
+}
+
+export async function generateLedgerGeneralQuestion(snapshot: LedgerGeneralQuestionSnapshot) {
+  const ai = getGeminiClient();
+  if (!ai) {
+    return null;
+  }
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: ledgerGeneralQuestionSchema,
+        temperature: 0.45,
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text: `
+You are a practical Korean household-ledger assistant.
+Answer the user's free-form question using only the provided aggregated ledger snapshot.
+Never invent transactions, budgets, dates, categories, or amounts.
+
+User question:
+${snapshot.question}
+
+Output rules:
+- title: a short Korean headline for the answer.
+- answer: 2-4 concise Korean sentences that directly answer the question.
+- highlights: 2-5 concrete data points from the snapshot. Use exact amounts/categories/dates only when present.
+- actions: 2-4 practical next actions.
+- caution: mention what cannot be concluded if the data is limited; otherwise keep it short.
+- closing: 1 short friendly sentence.
+- If the question is outside household ledger or budget analysis, gently redirect to ledger-related questions.
+
+Ledger snapshot:
+${JSON.stringify(snapshot.report, null, 2)}
+              `,
+            },
+          ],
+        },
+      ],
+    });
+
+    const parsed = parseJson<LedgerGeneralQuestionResult>(extractJsonText(response.text));
+    return sanitizeLedgerGeneralQuestion(parsed);
+  } catch (error) {
+    console.error("Gemini ledger general question error:", error);
     return null;
   }
 }
