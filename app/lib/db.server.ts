@@ -5,7 +5,7 @@ const globalForPrisma = globalThis as typeof globalThis & {
   __dbCacheKey?: string;
 };
 
-const PRISMA_CACHE_KEY = "dev-work-set-github-settings-v4";
+const PRISMA_CACHE_KEY = "space-theme-appearances-v1";
 
 if (!globalForPrisma.__db || globalForPrisma.__dbCacheKey !== PRISMA_CACHE_KEY) {
   void globalForPrisma.__db?.$disconnect().catch(() => undefined);

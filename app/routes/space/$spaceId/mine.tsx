@@ -1,49 +1,92 @@
-import { useLoaderData, Link, useFetcher } from "react-router";
-import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
-import { db } from "~/lib/db.server";
+import { Link, useLoaderData } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+
+import { SpaceExperience } from "~/components/space/SpaceExperience";
 import { getSession } from "~/lib/auth.server";
 import { myPostsCookie } from "~/lib/cookies.server";
+import { db } from "~/lib/db.server";
+import { DEFAULT_SPACE_THEME_KEY, type SpaceAlbumPage, type SpacePostForTheme } from "~/lib/space-theme";
 
-type PostItem = {
-  id: number;
-  nickname: string;
-  type: string;
-  content: string | null;
-  mediaUrl: string | null;
-  createdAt: Date;
-};
-
-export async function loader({ request, params }: LoaderFunctionArgs) {
-  const { user } = await getSession(request);
-  const cookieHeader = request.headers.get("Cookie");
-  const myPostIdsStr = (await myPostsCookie.parse(cookieHeader)) || [];
-  const myPostIds = myPostIdsStr.map((id: string) => Number(id)).filter((n: number) => !isNaN(n));
-
-  const myPosts = await db.memoryPost.findMany({
-    where: {
-      spaceId: params.spaceId,
-      OR: [
-        ...(user ? [{ writerId: user.id }] : []),
-        { id: { in: myPostIds } },
-      ],
-    },
-    orderBy: { createdAt: "desc" },
-  });
-
-  return { myPosts, spaceId: params.spaceId };
+function isAlbumPost(post: SpacePostForTheme) {
+  return post.type === "ALBUM" || post.type === "PHOTO";
 }
 
-export async function action({ request }: ActionFunctionArgs) {
+async function getMyPostIds(request: Request) {
+  const parsed = (await myPostsCookie.parse(request.headers.get("Cookie"))) || [];
+  return Array.isArray(parsed) ? parsed.map((id) => Number(id)).filter((id) => Number.isInteger(id)) : [];
+}
+
+function getInitialView(url: URL, posts: SpacePostForTheme[]): "MEMORY" | "ALBUM" {
+  const view = url.searchParams.get("view");
+  if (view === "album") return "ALBUM";
+  if (view === "memory") return "MEMORY";
+
+  const hasMemory = posts.some((post) => !isAlbumPost(post));
+  const hasAlbum = posts.some(isAlbumPost);
+  return !hasMemory && hasAlbum ? "ALBUM" : "MEMORY";
+}
+
+export async function loader({ request, params }: LoaderFunctionArgs) {
+  if (!params.spaceId) throw new Response("Not Found", { status: 404 });
+
+  const { user } = await getSession(request);
+  const myPostIds = await getMyPostIds(request);
+  const space = await db.memorySpace.findUnique({
+    where: { id: params.spaceId },
+    select: {
+      id: true,
+      title: true,
+      targetDate: true,
+      themeKey: true,
+    },
+  });
+  if (!space) throw new Response("Not Found", { status: 404 });
+
+  const ownershipFilters = [
+    ...(user ? [{ writerId: user.id }] : []),
+    ...(myPostIds.length > 0 ? [{ id: { in: myPostIds } }] : []),
+  ];
+  const myPosts: SpacePostForTheme[] =
+    ownershipFilters.length > 0
+      ? await db.memoryPost.findMany({
+          where: {
+            spaceId: space.id,
+            OR: ownershipFilters,
+          },
+          include: { appearances: true },
+          orderBy: { createdAt: "asc" },
+        })
+      : [];
+  const myAlbumPosts = myPosts.filter(isAlbumPost);
+  const initialAlbumPage: SpaceAlbumPage = {
+    items: myAlbumPosts,
+    nextCursor: null,
+    hasMore: false,
+  };
+
+  return {
+    space: {
+      ...space,
+      themeKey: space.themeKey || DEFAULT_SPACE_THEME_KEY,
+    },
+    myPosts,
+    initialAlbumPage,
+    initialView: getInitialView(new URL(request.url), myPosts),
+  };
+}
+
+export async function action({ request, params }: ActionFunctionArgs) {
   const formData = await request.formData();
   const postId = Number(formData.get("postId"));
+  if (!Number.isInteger(postId)) return { error: "삭제할 글을 찾을 수 없습니다." };
 
-  const cookieHeader = request.headers.get("Cookie");
-  const myPostIds = (await myPostsCookie.parse(cookieHeader)) || [];
   const { user } = await getSession(request);
-
-  const canDelete =
-    myPostIds.includes(String(postId)) ||
-    (user && (await db.memoryPost.findFirst({ where: { id: postId, writerId: user.id } })));
+  const myPostIds = await getMyPostIds(request);
+  const post = await db.memoryPost.findUnique({
+    where: { id: postId },
+    select: { id: true, spaceId: true, writerId: true },
+  });
+  const canDelete = Boolean(post && post.spaceId === params.spaceId && (myPostIds.includes(postId) || (user && post.writerId === user.id)));
 
   if (!canDelete) {
     return { error: "삭제 권한이 없습니다." };
@@ -54,72 +97,28 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function MyPostsPage() {
-  const { myPosts, spaceId } = useLoaderData<typeof loader>();
-  const fetcher = useFetcher();
+  const { space, myPosts, initialAlbumPage, initialView } = useLoaderData<typeof loader>();
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4">
-      <div className="max-w-2xl mx-auto">
-        <div className="flex items-center justify-between mb-6 pt-4">
-          <h1 className="text-2xl font-bold text-slate-800">내가 쓴 글 목록</h1>
-          <Link to={`/space/${spaceId}`} className="bg-slate-800 text-white px-3 py-2 rounded-lg text-sm font-bold">
-            메인으로 이동
-          </Link>
+    <>
+      <SpaceExperience
+        space={space}
+        posts={myPosts}
+        initialAlbumPage={initialAlbumPage}
+        initialView={initialView}
+        canChangeTheme={false}
+        showSettingsMenu={false}
+        allowPreviewDrag
+      />
+      <nav className="fixed bottom-4 left-1/2 z-[500] w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 rounded-lg border border-white/15 bg-black/35 p-2 text-sm font-bold text-white shadow-2xl backdrop-blur-md md:bottom-6 md:right-6 md:left-auto md:w-80 md:translate-x-0">
+        <div className="px-2 pb-2 pt-1 text-center">
+          <p className="text-sm font-bold">내가 쓴 글만 보이는 중</p>
+          <p className="mt-1 text-xs font-medium text-white/65">- 실제 공개 화면에서는 이렇게 다른 사람들 글과 함께 보여요</p>
         </div>
-
-        {myPosts.length === 0 ? (
-          <div className="text-center py-20 bg-white rounded-xl border border-slate-200 shadow-sm">
-            <p className="text-slate-400 mb-4">아직 작성한 기록이 없어요.</p>
-            <Link to={`/space/${spaceId}/write`} className="text-indigo-600 font-bold underline">
-              첫 글 쓰러 가기
-            </Link>
-          </div>
-        ) : (
-          <ul className="space-y-4">
-            {myPosts.map((post: PostItem) => (
-              <li key={post.id} className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
-                <div className="flex justify-between items-center mb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-lg text-slate-800">{post.nickname}</span>
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${post.type === "ALBUM" ? "bg-pink-100 text-pink-600" : "bg-indigo-100 text-indigo-600"}`}>
-                      {post.type === "ALBUM" ? "사진" : "메시지"}
-                    </span>
-                  </div>
-                  <span className="text-xs text-slate-400">{new Date(post.createdAt).toLocaleDateString()}</span>
-                </div>
-
-                <p className="text-slate-700 whitespace-pre-wrap leading-relaxed">{post.content ?? ""}</p>
-
-                {post.mediaUrl && (
-                  <div className="mt-3 rounded-lg overflow-hidden border border-slate-100">
-                    <img src={post.mediaUrl} alt="" className="w-full max-h-60 object-cover" />
-                  </div>
-                )}
-
-                <div className="mt-4 pt-3 border-t border-slate-100 flex justify-end">
-                  <fetcher.Form method="post">
-                    <input type="hidden" name="postId" value={post.id} />
-                    <button
-                      className="text-xs bg-red-50 text-red-500 px-3 py-2 rounded font-bold hover:bg-red-100 transition flex items-center gap-1"
-                      onClick={(e) => {
-                        if (!confirm("정말 삭제하시겠습니까? (복구할 수 없습니다)")) e.preventDefault();
-                      }}
-                    >
-                      삭제하기
-                    </button>
-                  </fetcher.Form>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        <div className="mt-8 text-center pb-10">
-          <Link to={`/space/${spaceId}/write`} className="inline-block w-full py-4 border-2 border-dashed border-slate-300 text-slate-500 rounded-xl font-bold hover:bg-white hover:border-indigo-400 hover:text-indigo-500 transition">
-            + 다른 글 쓰기
-          </Link>
-        </div>
-      </div>
-    </div>
+        <Link to={`/space/${space.id}/write`} className="block w-full rounded-md bg-white px-4 py-2 text-center text-slate-950 transition hover:bg-white/90">
+          다시 쓰기
+        </Link>
+      </nav>
+    </>
   );
 }

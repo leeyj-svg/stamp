@@ -151,3 +151,17 @@ export type LedgerPurchaseAdviceResult = {
   suggestions: string[];
   closing: string;
 };
+
+export type LedgerGeneralQuestionSnapshot = {
+  question: string;
+  report: LedgerAiSummarySnapshot;
+};
+
+export type LedgerGeneralQuestionResult = {
+  title: string;
+  answer: string;
+  highlights: string[];
+  actions: string[];
+  caution: string;
+  closing: string;
+};

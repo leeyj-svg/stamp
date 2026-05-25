@@ -72,6 +72,16 @@ enum DevWorkAttachmentKind {
   OTHER
 }
 
+enum SpaceViewport {
+  DESKTOP
+  MOBILE
+}
+
+enum SpaceSurface {
+  MEMORY
+  ALBUM
+}
+
 model User {
   id          String     @id @default(cuid())
   name        String
@@ -704,14 +714,16 @@ model MemorySpace {
   title      String // "000 생일 축하해"
   targetDate DateTime // 12월 25일 (이 날짜 전엔 못 들어감)
   password   String // "0000" (생일자 접속용 비번)
+  themeKey   String   @default("galaxy")
 
   // AI가 분석한 '별자리 배치 정보'를 저장하는 JSON (전체 맵)
   starMap Json? // { "posts": [{id:1, x:10, y:20}, ...] }
 
-  posts     MemoryPost[]
-  createdAt DateTime     @default(now())
-  user      User?        @relation(fields: [userId], references: [id])
-  userId    String?
+  posts       MemoryPost[]
+  appearances MemorySpaceAppearance[]
+  createdAt   DateTime                @default(now())
+  user        User?                   @relation(fields: [userId], references: [id])
+  userId      String?
 }
 
 model MemoryPost {
@@ -720,8 +732,9 @@ model MemoryPost {
   space   MemorySpace @relation(fields: [spaceId], references: [id])
 
   type     String // "MESSAGE" (롤링페이퍼) | "PHOTO" (앨범)
-  content  String? // 내용
-  mediaUrl String? // 사진 URL
+  content  String? @db.Text // 내용
+  mediaUrl String? // 크게 보기용 사진 URL
+  thumbnailUrl String? // 카드/목록용 썸네일 URL
 
   // 작성자 정보
   writerId String? // 로그인한 유저 ID (비회원이면 null)
@@ -731,9 +744,44 @@ model MemoryPost {
   nickname String // "지나가던 친구" (필수)
 
   // 개별 스타일 (AI가 분석한 감정, 색상 등)
-  aiStyle   Json?
-  password  String?
-  createdAt DateTime @default(now())
+  aiStyle     Json?
+  password    String?
+  appearances MemoryPostAppearance[]
+  createdAt   DateTime               @default(now())
+
+  @@index([spaceId, type, createdAt])
+}
+
+model MemorySpaceAppearance {
+  id        Int           @id @default(autoincrement())
+  spaceId   String
+  viewport  SpaceViewport
+  surface   SpaceSurface
+  layoutKey String
+  config    Json?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  space MemorySpace @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([spaceId, viewport, surface])
+  @@index([spaceId, viewport])
+}
+
+model MemoryPostAppearance {
+  id        Int           @id @default(autoincrement())
+  postId    Int
+  viewport  SpaceViewport
+  surface   SpaceSurface
+  style     Json?
+  sortOrder Int           @default(0)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  post MemoryPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, viewport, surface])
+  @@index([viewport, surface, sortOrder])
 }
 
 model PhotoAlbum {

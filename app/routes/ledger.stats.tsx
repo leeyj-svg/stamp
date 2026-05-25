@@ -27,13 +27,15 @@ import {
   getFixedExpenseCategoryIds,
 } from "~/lib/ledger-budget";
 import type {
+  LedgerGeneralQuestionResult,
+  LedgerGeneralQuestionSnapshot,
   LedgerAiAnalysisMode,
   LedgerAiSummaryResult,
   LedgerAiSummarySnapshot,
   LedgerPurchaseAdviceResult,
   LedgerPurchaseAdviceSnapshot,
 } from "~/lib/ledger-ai";
-import { generateLedgerPurchaseAdvice, generateLedgerStatsSummary, hasGeminiApiKey } from "~/lib/gemini.server";
+import { generateLedgerGeneralQuestion, generateLedgerPurchaseAdvice, generateLedgerStatsSummary, hasGeminiApiKey } from "~/lib/gemini.server";
 import { ensureLedgerSetup, getLedgerPeriodLabel, getLedgerReferenceDateForMonthToken, getMonthToken, shiftMonthToken } from "~/lib/ledger";
 import { cn } from "~/lib/utils";
 
@@ -53,6 +55,14 @@ type LedgerPurchaseAdviceActionData = {
   question?: string;
   snapshot?: LedgerPurchaseAdviceSnapshot;
   advice?: LedgerPurchaseAdviceResult;
+  error?: string;
+  generatedAt?: string;
+};
+type LedgerGeneralQuestionActionData = {
+  requestKey: string;
+  question?: string;
+  snapshot?: LedgerGeneralQuestionSnapshot;
+  answer?: LedgerGeneralQuestionResult;
   error?: string;
   generatedAt?: string;
 };
@@ -231,6 +241,10 @@ function buildLedgerAiRequestKey(monthToken: string, filter: EntryFilterValue, m
 
 function buildLedgerPurchaseAdviceRequestKey(monthToken: string, filter: EntryFilterValue, question: string) {
   return `${monthToken}:${filter}:${question.trim().toLowerCase()}`;
+}
+
+function buildLedgerGeneralQuestionRequestKey(monthToken: string, filter: EntryFilterValue, question: string) {
+  return `${monthToken}:${filter}:general:${question.trim().toLowerCase()}`;
 }
 
 function getMonthStart(monthToken: string) {
@@ -1139,7 +1153,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
-  if (intent !== "generate_ai_summary" && intent !== "ask_purchase_advice") {
+  if (intent !== "generate_ai_summary" && intent !== "ask_purchase_advice" && intent !== "ask_general_question") {
     return new Response("Bad Request", { status: 400 });
   }
 
@@ -1147,6 +1161,120 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     parseMonthToken(typeof formData.get("monthToken") === "string" ? String(formData.get("monthToken")) : null) ??
     getMonthToken(new Date());
   const selectedFilter = parseEntryFilter(typeof formData.get("type") === "string" ? String(formData.get("type")) : null);
+
+  if (intent === "ask_general_question") {
+    const question = typeof formData.get("question") === "string" ? String(formData.get("question")).trim() : "";
+    const requestKey = buildLedgerGeneralQuestionRequestKey(monthToken, selectedFilter, question);
+
+    if (question.length < 2) {
+      return {
+        requestKey,
+        error: "궁금한 내용을 조금 더 적어주세요.",
+      } satisfies LedgerGeneralQuestionActionData;
+    }
+
+    if (!hasGeminiApiKey()) {
+      return {
+        requestKey,
+        question,
+        error: "GEMINI_API_KEY를 설정하면 자유 질문을 바로 쓸 수 있어요.",
+      } satisfies LedgerGeneralQuestionActionData;
+    }
+
+    await ensureLedgerSetup(db, user.id);
+    const { ensureLedgerBudgetPeriodForDate } = await import("~/lib/ledger-budget.server");
+    const monthStart = getMonthStart(monthToken);
+    const initialBudgetResult = await ensureLedgerBudgetPeriodForDate(db, user.id, monthStart);
+    const statsReferenceDate = getLedgerReferenceDateForMonthToken(
+      monthToken,
+      initialBudgetResult.settings.defaultPeriodBasis as LedgerPeriodBasis,
+      initialBudgetResult.settings.paydayDay ?? 25,
+    );
+    const currentBudgetResult =
+      statsReferenceDate.getTime() === monthStart.getTime()
+        ? initialBudgetResult
+        : await ensureLedgerBudgetPeriodForDate(db, user.id, statsReferenceDate);
+    const periodStart = new Date(currentBudgetResult.period.periodStartAt);
+    const periodEnd = new Date(currentBudgetResult.period.periodEndAt);
+    const entries = await db.ledgerEntry.findMany({
+      where: {
+        userId: user.id,
+        excludeFromStats: false,
+        usedAt: {
+          gte: periodStart,
+          lt: periodEnd,
+        },
+      },
+      select: {
+        type: true,
+        amount: true,
+        usedAt: true,
+        category: {
+          select: {
+            name: true,
+          },
+        },
+      },
+      orderBy: [{ usedAt: "asc" }, { id: "asc" }],
+    });
+    const report = buildLedgerAiSummarySnapshot({
+      analysisMode: "OVERVIEW",
+      entries: entries.map((entry) => ({
+        type: entry.type,
+        amount: Number(entry.amount),
+        usedAt: entry.usedAt.toISOString(),
+        categoryName: entry.category?.name ?? null,
+      })),
+      budgetPlans: currentBudgetResult.period.plans.map((plan) => ({
+        type: plan.type,
+        allocations: plan.allocations.map((allocation) => ({
+          categoryName: allocation.category.name,
+          plannedAmount: Number(allocation.plannedAmount),
+          isFixed: allocation.isFixed,
+        })),
+      })),
+      selectedFilter,
+      periodLabel: getLedgerPeriodLabel(periodStart, periodEnd),
+      periodStart,
+      periodEnd,
+    });
+
+    if (report.entryCount <= 0) {
+      return {
+        requestKey,
+        question,
+        error: "질문에 참고할 내역이 아직 없어요.",
+      } satisfies LedgerGeneralQuestionActionData;
+    }
+
+    const snapshot = { question, report } satisfies LedgerGeneralQuestionSnapshot;
+    const snapshotJson = JSON.stringify(snapshot);
+    if (snapshotJson.length > LEDGER_AI_SNAPSHOT_MAX_LENGTH) {
+      return {
+        requestKey,
+        question,
+        error: "Gemini에 보낼 가계부 정보가 너무 커요. 필터를 좁히고 다시 시도해 주세요.",
+      } satisfies LedgerGeneralQuestionActionData;
+    }
+
+    const answer = await generateLedgerGeneralQuestion(snapshot);
+    if (!answer) {
+      return {
+        requestKey,
+        question,
+        snapshot,
+        error: "Gemini 답변을 만들지 못했어요. 잠시 후 다시 시도해 주세요.",
+      } satisfies LedgerGeneralQuestionActionData;
+    }
+
+    return {
+      requestKey,
+      question,
+      snapshot,
+      answer,
+      generatedAt: new Date().toISOString(),
+    } satisfies LedgerGeneralQuestionActionData;
+  }
 
   if (intent === "ask_purchase_advice") {
     const question = typeof formData.get("question") === "string" ? String(formData.get("question")).trim() : "";
@@ -1362,7 +1490,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export function shouldRevalidate({ formData, defaultShouldRevalidate }: ShouldRevalidateFunctionArgs) {
-  if (formData?.get("intent") === "generate_ai_summary" || formData?.get("intent") === "ask_purchase_advice") {
+  if (
+    formData?.get("intent") === "generate_ai_summary" ||
+    formData?.get("intent") === "ask_purchase_advice" ||
+    formData?.get("intent") === "ask_general_question"
+  ) {
     return false;
   }
 
@@ -2401,6 +2533,9 @@ export default function LedgerStatsPage() {
               />
               <div className="mt-4">
                 <CategoryBudgetQuestionBox sections={categoryBudgetSections} selectedFilterLabel={selectedFilterLabel} />
+              </div>
+              <div className="mt-4">
+                <LedgerGeneralQuestionBox monthToken={monthToken} selectedFilter={selectedFilter} />
               </div>
               <div className="mt-4">
                 <PurchaseBudgetAdviceBox
@@ -3583,6 +3718,170 @@ function getPurchaseAdviceVerdictTone(verdict: LedgerPurchaseAdviceResult["verdi
     titleClassName: "text-slate-700",
     dotClassName: "bg-slate-300",
   };
+}
+
+function LedgerGeneralQuestionBox({
+  monthToken,
+  selectedFilter,
+}: {
+  monthToken: string;
+  selectedFilter: EntryFilterValue;
+}) {
+  const questionFetcher = useFetcher<LedgerGeneralQuestionActionData>();
+  const [question, setQuestion] = useState("");
+  const trimmedQuestion = question.trim();
+  const requestPrefix = `${monthToken}:${selectedFilter}:general:`;
+  const questionData = questionFetcher.data?.requestKey.startsWith(requestPrefix) ? questionFetcher.data : null;
+  const isLoading =
+    questionFetcher.state !== "idle" &&
+    questionFetcher.formData?.get("intent") === "ask_general_question" &&
+    questionFetcher.formData?.get("monthToken") === monthToken &&
+    String(questionFetcher.formData?.get("type") ?? "ALL") === selectedFilter;
+  const answer = questionData?.answer ?? null;
+  const examples = [
+    "이번 달 소비에서 제일 조심할 부분이 뭐야?",
+    "저축을 더 늘리려면 어디부터 줄이면 좋을까?",
+    "다음 주까지 지출을 어떻게 조절하면 좋을까?",
+    "고정비랑 변동비 중 뭐가 더 문제야?",
+  ];
+
+  const askQuestion = () => {
+    if (!trimmedQuestion || isLoading) {
+      return;
+    }
+
+    questionFetcher.submit(
+      {
+        intent: "ask_general_question",
+        monthToken,
+        type: selectedFilter,
+        question: trimmedQuestion,
+      },
+      { method: "post" },
+    );
+  };
+
+  return (
+    <div className="rounded-2xl border border-sky-200 bg-gradient-to-br from-white via-sky-50/70 to-indigo-50 px-4 py-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[0.82rem] font-semibold text-slate-900">Gemini 자유 질문</p>
+          <p className="mt-1 text-[0.7rem] leading-5 text-slate-500">
+            이번 기간의 가계부와 예산을 기준으로 궁금한 걸 자유롭게 물어볼 수 있어요.
+          </p>
+        </div>
+        <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[0.64rem] font-medium text-sky-700">버튼 클릭 시 토큰 사용</span>
+      </div>
+
+      <form
+        className="mt-3 space-y-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          askQuestion();
+        }}
+      >
+        <textarea
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          rows={3}
+          placeholder="예: 이번 달 식비가 너무 높은지 봐줘"
+          className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-3 text-[0.8rem] leading-5 text-slate-800 outline-none transition-colors placeholder:text-slate-400 focus:border-sky-300"
+        />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-[0.66rem] text-slate-400">가계부, 예산, 절약, 현금흐름 질문에 잘 맞아요.</p>
+          <button
+            type="submit"
+            disabled={!trimmedQuestion || isLoading}
+            className="rounded-full bg-slate-900 px-3 py-1.5 text-[0.72rem] font-medium text-white transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isLoading ? "답변 중" : "Gemini에게 질문하기"}
+          </button>
+        </div>
+      </form>
+
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {examples.map((example) => (
+          <button
+            key={example}
+            type="button"
+            onClick={() => setQuestion(example)}
+            className="rounded-full border border-sky-100 bg-white/80 px-2.5 py-1 text-[0.66rem] font-medium text-slate-500 transition-colors hover:bg-sky-50 hover:text-sky-700"
+          >
+            {example}
+          </button>
+        ))}
+      </div>
+
+      {isLoading ? (
+        <div className="mt-4 rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[0.76rem] font-semibold text-slate-800">가계부를 읽는 중</p>
+              <p className="mt-1 text-[0.68rem] text-slate-500">기간 내역과 예산을 함께 보고 답변하고 있어요.</p>
+            </div>
+            <div className="h-8 w-8 shrink-0 animate-spin rounded-full border-2 border-sky-300 border-t-transparent" />
+          </div>
+        </div>
+      ) : null}
+
+      {!isLoading && questionData?.error ? (
+        <div className="mt-4 rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3">
+          <p className="text-[0.76rem] font-semibold text-rose-600">답변을 만들지 못했어요</p>
+          <p className="mt-1 text-[0.7rem] leading-5 text-rose-500">{questionData.error}</p>
+        </div>
+      ) : null}
+
+      {!isLoading && answer ? (
+        <div className="mt-4 rounded-2xl bg-white/90 px-4 py-4 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[0.86rem] font-semibold text-sky-700">{answer.title}</p>
+              <p className="mt-1 text-[0.74rem] leading-5 text-slate-600">{answer.answer}</p>
+            </div>
+            {questionData?.generatedAt ? (
+              <p className="shrink-0 text-[0.64rem] text-slate-400">
+                {new Intl.DateTimeFormat("ko-KR", {
+                  month: "numeric",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                }).format(new Date(questionData.generatedAt))}
+              </p>
+            ) : null}
+          </div>
+
+          {answer.highlights.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {answer.highlights.map((highlight) => (
+                <div key={highlight} className="flex items-start gap-2">
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400" />
+                  <p className="text-[0.72rem] leading-5 text-slate-600">{highlight}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {answer.actions.length > 0 ? (
+            <div className="mt-3 rounded-xl bg-sky-50/70 px-3 py-3">
+              <p className="text-[0.7rem] font-semibold text-sky-700">바로 해볼 것</p>
+              <div className="mt-2 space-y-1.5">
+                {answer.actions.map((action) => (
+                  <p key={action} className="text-[0.7rem] leading-5 text-slate-600">
+                    {action}
+                  </p>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {answer.caution ? (
+            <p className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-[0.68rem] leading-5 text-slate-500">{answer.caution}</p>
+          ) : null}
+          <p className="mt-3 text-[0.7rem] text-slate-500">{answer.closing}</p>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function PurchaseBudgetAdviceBox({
