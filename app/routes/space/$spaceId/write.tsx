@@ -8,6 +8,7 @@ import { SpaceThemeBackground } from "~/components/space/SpaceExperience";
 import { getSession } from "~/lib/auth.server";
 import { myPostsCookie } from "~/lib/cookies.server";
 import { db } from "~/lib/db.server";
+import { getPublicOrigin, getSpaceShareMeta } from "~/lib/space-meta";
 import { getSpaceTheme } from "~/lib/space-theme";
 import { upsertPostAppearancesForPost } from "~/lib/space-theme.server";
 import { getPhotoLimitError, MAX_ALBUM_PHOTO_COUNT, MAX_PHOTO_UPLOAD_BYTES, MAX_PHOTO_UPLOAD_MB, type PhotoUploadResponse } from "~/lib/space-upload";
@@ -90,7 +91,20 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   });
 
   if (!space) throw new Response("Not Found", { status: 404 });
-  return { user, space };
+  return { user, space, origin: getPublicOrigin(request) };
+}
+
+export function meta({ data }: { data?: Awaited<ReturnType<typeof loader>> }) {
+  const space = data?.space;
+  const title = "소중한 마음이 담긴 쪽지와 사진을 남겨주세요!";
+  const description = "전하고 싶은 마음을 쪽지와 사진으로 남기면 공개일까지 비공개로 안전하게 보관돼요.";
+
+  return getSpaceShareMeta({
+    origin: data?.origin || "https://www.tcroom.kr",
+    path: `/space/${space?.id || ""}/write`,
+    title,
+    description,
+  });
 }
 
 export async function action({ request, params }: ActionFunctionArgs) {

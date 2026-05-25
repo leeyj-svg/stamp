@@ -16,8 +16,18 @@ import { db } from "~/lib/db.server";
 import { useEffect, useState } from "react";
 import { StampSlot } from "~/components/stampSlot";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog";
+import { getSpaceShareMeta } from "~/lib/space-meta";
 
 const STAMPS_PER_CARD = 10;
+const HOME_META_TITLE = "아이들과 교사들의 행복한 공간 tcroom";
+
+export function meta() {
+  return getSpaceShareMeta({
+    origin: "https://www.tcroom.kr",
+    path: "/",
+    title: HOME_META_TITLE,
+  });
+}
 
 // HomePage에서 로드할 데이터의 타입 정의
 type HomePageLoaderData = {
