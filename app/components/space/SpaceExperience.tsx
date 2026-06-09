@@ -10,6 +10,7 @@ import {
   type SceneObjectDescriptor,
   type SceneShape,
 } from "~/lib/space-scene";
+import { formatKoreanDate } from "~/lib/space-date";
 import {
   SPACE_THEME_OPTIONS,
   getPostAppearance,
@@ -204,11 +205,7 @@ function getStoredStyleNumber(value: unknown, key: string) {
 }
 
 function formatDate(value: Date | string) {
-  return new Date(value).toLocaleDateString("ko-KR", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+  return formatKoreanDate(value);
 }
 
 function getThemeObjectLabel(themeKey: string) {

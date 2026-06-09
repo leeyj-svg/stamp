@@ -8,6 +8,7 @@ import { SpaceThemePicker } from "~/components/space/SpaceExperience";
 import { getSessionWithPermission } from "~/lib/auth.server";
 import { db } from "~/lib/db.server";
 import { generateAiMessages } from "~/lib/gemini.server";
+import { parseKoreanDateInput } from "~/lib/space-date";
 import { isSpaceThemeKey } from "~/lib/space-theme";
 import { applySpaceTheme, regeneratePostAppearances, upsertPostAppearancesForPost } from "~/lib/space-theme.server";
 
@@ -27,9 +28,7 @@ function parsePositivePage(value: string | null) {
 }
 
 function parseDateInput(value: string | null) {
-  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const date = new Date(`${value}T00:00:00+09:00`);
-  return Number.isNaN(date.getTime()) ? null : date;
+  return parseKoreanDateInput(value);
 }
 
 function addDays(date: Date, days: number) {

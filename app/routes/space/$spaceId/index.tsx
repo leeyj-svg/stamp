@@ -6,6 +6,7 @@ import { LockedSpaceScreen, SpaceExperience } from "~/components/space/SpaceExpe
 import { getSession } from "~/lib/auth.server";
 import { spaceUnlockCookie } from "~/lib/cookies.server";
 import { db } from "~/lib/db.server";
+import { hasSpacePublicDatePassed } from "~/lib/space-date";
 import { getPublicOrigin, getSpaceShareMeta } from "~/lib/space-meta";
 import { DEFAULT_SPACE_THEME_KEY, isSpaceThemeKey, type SpaceAlbumPage, type SpacePostForTheme } from "~/lib/space-theme";
 import { applySpaceTheme, canChangeSpaceTheme } from "~/lib/space-theme.server";
@@ -15,10 +16,6 @@ const POSITION_BOUNDS = {
   DESKTOP: { minX: -560, maxX: 560, minY: -300, maxY: 300 },
   MOBILE: { minX: -330, maxX: 330, minY: -190, maxY: 170 },
 } as const;
-
-function hasTargetDatePassed(targetDate: Date | string) {
-  return Date.now() >= new Date(targetDate).getTime();
-}
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -199,7 +196,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
 
   if (!space) return { error: "공간이 존재하지 않습니다.", posts: null };
 
-  if (!hasTargetDatePassed(space.targetDate)) {
+  if (!hasSpacePublicDatePassed(space.targetDate)) {
     return { error: "아직 공개 날짜가 지나지 않았습니다.", posts: null };
   }
 
@@ -230,7 +227,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   });
   if (!space) throw new Response("Not Found", { status: 404 });
 
-  const isDatePassed = hasTargetDatePassed(space.targetDate);
+  const isDatePassed = hasSpacePublicDatePassed(space.targetDate);
   const isAdmin = user?.role === "ADMIN";
   const isOwner = Boolean(user && user.id === space.userId);
   const canChangeTheme = canChangeSpaceTheme(user, space);

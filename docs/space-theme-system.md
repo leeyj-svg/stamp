@@ -53,6 +53,13 @@
 - The writer receives a signed `my-posts` cookie containing their post ids so they can find/delete their own guest posts later.
 - Theme changes never delete or duplicate friend content; they only regenerate appearance rows.
 
+## Public Date Rule
+
+- `MemorySpace.targetDate` represents the Korean calendar day when the recipient SPACE opens.
+- Public SPACE access should open at 00:00 Asia/Seoul on that calendar day.
+- Date-only form values must be parsed as `YYYY-MM-DDT00:00:00+09:00`, not as JavaScript's UTC `new Date("YYYY-MM-DD")` behavior.
+- Existing spaces may contain UTC-midnight date-only values; unlocked checks compare Korean date keys so those spaces still open on the intended Korean date.
+
 ## 기본 규칙
 
 - `MemorySpace.themeKey`는 공간의 단일 테마입니다.
