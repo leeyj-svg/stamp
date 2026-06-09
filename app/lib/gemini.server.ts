@@ -30,6 +30,9 @@ type OptimizedLayout = {
 
 let geminiClient: GoogleGenAI | null | undefined;
 
+const GEMINI_PRO_MODEL = "gemini-3.1-pro-preview";
+const GEMINI_FLASH_MODEL = "gemini-3.5-flash";
+
 const messageSchema = {
   type: Type.OBJECT,
   properties: {
@@ -486,7 +489,7 @@ export async function generateAiMessages(
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-pro",
+      model: GEMINI_PRO_MODEL,
       config: {
         responseMimeType: "application/json",
         responseSchema: messageSchema,
@@ -539,7 +542,7 @@ export async function optimizeLayout(posts: { id: number | string; content: stri
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: GEMINI_FLASH_MODEL,
       config: {
         responseMimeType: "application/json",
         responseSchema: layoutSchema,
@@ -585,7 +588,7 @@ export async function generateLedgerStatsSummary(snapshot: LedgerAiSummarySnapsh
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: GEMINI_FLASH_MODEL,
       config: {
         responseMimeType: "application/json",
         responseSchema: ledgerStatsSummarySchema,
@@ -641,7 +644,7 @@ export async function generateLedgerPurchaseAdvice(snapshot: LedgerPurchaseAdvic
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: GEMINI_FLASH_MODEL,
       config: {
         responseMimeType: "application/json",
         responseSchema: ledgerPurchaseAdviceSchema,
@@ -698,7 +701,7 @@ export async function generateLedgerGeneralQuestion(snapshot: LedgerGeneralQuest
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: GEMINI_FLASH_MODEL,
       config: {
         responseMimeType: "application/json",
         responseSchema: ledgerGeneralQuestionSchema,
