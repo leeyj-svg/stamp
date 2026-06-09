@@ -645,9 +645,8 @@ export function SpaceThemePicker({ currentThemeKey, compact = false }: { current
               <button
                 type="submit"
                 aria-pressed={selected}
-                className={`h-full w-full rounded-lg border p-3 text-left transition ${
-                  selected ? "border-slate-900 bg-slate-900 text-white shadow-sm" : "border-slate-200 bg-white text-slate-700 hover:border-slate-400"
-                }`}
+                className={`h-full w-full rounded-lg border p-3 text-left transition ${selected ? "border-slate-900 bg-slate-900 text-white shadow-sm" : "border-slate-200 bg-white text-slate-700 hover:border-slate-400"
+                  }`}
               >
                 <span className="block text-xs font-bold">{theme.label}</span>
                 <span className={selected ? "mt-1 block text-[11px] text-white/70" : "mt-1 block text-[11px] text-slate-400"}>{theme.shortLabel}</span>
@@ -983,8 +982,8 @@ function MobileSpaceExperience({
   };
 
   return (
-    <div className="relative z-10 min-h-screen px-4 pb-20 pt-5" style={{ color: theme.textColor }}>
-      <div className="sticky top-3 z-[300] mb-5 flex items-start gap-2">
+    <div className="relative z-10 min-h-screen px-4 pb-20 pt-3" style={{ color: theme.textColor }}>
+      <div className="sticky top-2 z-[300] mb-3 flex items-start gap-2">
         <div className="min-w-0 flex-1 rounded-lg border border-white/15 bg-black/24 p-1 backdrop-blur-md">
           <SurfaceTabs view={view} setView={setView} memoryLabel={theme.memoryLabel} albumLabel={theme.albumLabel} />
         </div>
@@ -999,12 +998,12 @@ function MobileSpaceExperience({
         )}
       </div>
 
-      <header className="min-h-[24vh] pt-5">
-        <p className="text-xs font-bold uppercase tracking-[0.28em]" style={{ color: theme.mutedTextColor }}>
+      <header className="min-h-[20vh] pt-1">
+        <p className="text-[9px] font-bold uppercase tracking-[0.22em]" style={{ color: theme.mutedTextColor }}>
           {theme.shortLabel}
         </p>
-        <h1 className="mt-3 text-3xl font-bold leading-tight tracking-normal">{space.title}</h1>
-        <p className="mt-4 text-sm leading-relaxed" style={{ color: theme.mutedTextColor }}>
+        <h1 className="mt-1 text-xl font-bold leading-tight tracking-normal">{space.title}</h1>
+        <p className="mt-2 text-xs leading-relaxed" style={{ color: theme.mutedTextColor }}>
           {theme.unlockedTitle}
         </p>
       </header>
@@ -1071,21 +1070,19 @@ function SurfaceTabs({
       <button
         type="button"
         onClick={() => setView("MEMORY")}
-        className={`flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-bold transition md:flex-none ${
-          view === "MEMORY" ? "bg-white text-slate-950 shadow-sm" : "text-white/75 hover:text-white"
-        }`}
+        className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-bold transition md:flex-none md:gap-2 md:px-4 md:py-2 md:text-sm ${view === "MEMORY" ? "bg-white text-slate-950 shadow-sm" : "text-white/75 hover:text-white"
+          }`}
       >
-        <MessageCircle className="h-4 w-4" />
+        <MessageCircle className="h-3.5 w-3.5 md:h-4 md:w-4" />
         {memoryLabel}
       </button>
       <button
         type="button"
         onClick={() => setView("ALBUM")}
-        className={`flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-bold transition md:flex-none ${
-          view === "ALBUM" ? "bg-white text-slate-950 shadow-sm" : "text-white/75 hover:text-white"
-        }`}
+        className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-bold transition md:flex-none md:gap-2 md:px-4 md:py-2 md:text-sm ${view === "ALBUM" ? "bg-white text-slate-950 shadow-sm" : "text-white/75 hover:text-white"
+          }`}
       >
-        <ImageIcon className="h-4 w-4" />
+        <ImageIcon className="h-3.5 w-3.5 md:h-4 md:w-4" />
         {albumLabel}
       </button>
     </div>
@@ -1130,9 +1127,8 @@ function MobileSceneScroller({ resetKey, children, revealOnEntrance = false }: {
   return (
     <section
       ref={scrollerRef}
-      className={`-mx-4 h-[58vh] min-h-[430px] overflow-x-auto overflow-y-hidden overscroll-x-contain pb-6 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
-        revealOnEntrance ? "space-memory-entrance-reveal" : ""
-      }`}
+      className={`-mx-4 h-[58vh] min-h-[430px] overflow-x-auto overflow-y-hidden overscroll-x-contain pb-6 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${revealOnEntrance ? "space-memory-entrance-reveal" : ""
+        }`}
     >
       <div className="relative mx-auto h-full w-[195vw] min-w-[760px] max-w-[860px]">{children}</div>
     </section>
@@ -1257,9 +1253,8 @@ function DesktopMemoryObject({
         onOpen();
       }}
       aria-label={`${post.nickname}님의 쪽지 열기`}
-      className={`group absolute flex h-16 w-16 items-center justify-center bg-transparent p-0 transition hover:z-20 ${
-        canDrag ? "cursor-grab touch-none active:cursor-grabbing" : ""
-      }`}
+      className={`group absolute flex h-16 w-16 items-center justify-center bg-transparent p-0 transition hover:z-20 ${canDrag ? "cursor-grab touch-none active:cursor-grabbing" : ""
+        }`}
       style={{
         transform: `translate(${style.x}px, ${style.y}px) rotate(${style.rotation}deg) scale(${style.scale})`,
         animationDelay: `${style.delay}ms`,
@@ -1320,9 +1315,8 @@ function DesktopOpenedNoteCard({
 
   return (
     <article
-      className={`absolute w-80 max-w-[calc(100vw-48px)] rounded-lg border border-white/15 p-5 shadow-2xl backdrop-blur-xl ${
-        canDrag ? "cursor-grab touch-none select-none active:cursor-grabbing" : ""
-      }`}
+      className={`absolute w-80 max-w-[calc(100vw-48px)] rounded-lg border border-white/15 p-5 shadow-2xl backdrop-blur-xl ${canDrag ? "cursor-grab touch-none select-none active:cursor-grabbing" : ""
+        }`}
       onMouseDown={onFocus}
       style={{
         zIndex,
@@ -1377,9 +1371,8 @@ function MobileMemoryObject({
         onOpen();
       }}
       aria-label={`${post.nickname}님의 쪽지 열기`}
-      className={`group absolute left-1/2 top-1/2 flex h-12 w-12 items-center justify-center bg-transparent p-0 transition active:scale-95 ${
-        canDrag ? "cursor-grab touch-none active:cursor-grabbing" : ""
-      }`}
+      className={`group absolute left-1/2 top-1/2 flex h-12 w-12 items-center justify-center bg-transparent p-0 transition active:scale-95 ${canDrag ? "cursor-grab touch-none active:cursor-grabbing" : ""
+        }`}
       style={{
         transform: `translate(${style.x}px, ${style.y}px) rotate(${style.rotation}deg) scale(${style.scale})`,
         animationDelay: `${style.delay}ms`,
@@ -1437,9 +1430,8 @@ function MobileOpenedNoteCard({
 
   return (
     <article
-      className={`absolute left-1/2 top-1/2 w-[min(82vw,320px)] max-h-64 overflow-y-auto rounded-lg border border-white/15 p-4 shadow-2xl backdrop-blur-xl ${
-        canDrag ? "cursor-grab touch-none select-none active:cursor-grabbing" : ""
-      }`}
+      className={`absolute left-1/2 top-1/2 w-[min(82vw,320px)] max-h-64 overflow-y-auto rounded-lg border border-white/15 p-4 shadow-2xl backdrop-blur-xl ${canDrag ? "cursor-grab touch-none select-none active:cursor-grabbing" : ""
+        }`}
       onMouseDown={onFocus}
       onTouchStart={onFocus}
       style={{
