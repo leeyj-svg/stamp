@@ -6,6 +6,7 @@ import { Search, UserCheck, XCircle } from "lucide-react";
 
 import { getSessionWithPermission } from "~/lib/auth.server";
 import { db } from "~/lib/db.server";
+import { parseKoreanDateInput } from "~/lib/space-date";
 import { createDefaultSpaceAppearances } from "~/lib/space-theme.server";
 import { DEFAULT_SPACE_THEME_KEY, SPACE_THEME_OPTIONS, isSpaceThemeKey } from "~/lib/space-theme";
 
@@ -57,13 +58,18 @@ export async function action({ request }: ActionFunctionArgs) {
       return { createError: "제목, 공개 일자, 비밀번호를 입력해 주세요." };
     }
 
+    const targetDate = parseKoreanDateInput(dateStr);
+    if (!targetDate) {
+      return { createError: "공개 일자를 다시 확인해 주세요." };
+    }
+
     const linkedUser = userId ? await db.user.findUnique({ where: { id: userId }, select: { id: true } }) : null;
 
     const space = await db.$transaction(async (tx) => {
       const createdSpace = await tx.memorySpace.create({
         data: {
           title,
-          targetDate: new Date(dateStr),
+          targetDate,
           password,
           themeKey,
           userId: linkedUser?.id || null,
