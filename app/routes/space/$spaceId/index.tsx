@@ -308,5 +308,5 @@ export default function SpaceMain() {
     return <LockedSpaceScreen space={space} isDatePassed={isDatePassed} targetDate={targetDate} error={error} />;
   }
 
-  return <SpaceExperience space={space} posts={unlockedPosts} initialAlbumPage={unlockedAlbumPage} canChangeTheme={canChangeTheme} />;
+  return <SpaceExperience space={space} posts={unlockedPosts} initialAlbumPage={unlockedAlbumPage} canChangeTheme={canChangeTheme} showEntranceEffect />;
 }

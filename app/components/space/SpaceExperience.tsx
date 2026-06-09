@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { Form, useFetcher } from "react-router";
 import { ImageIcon, LockKeyhole, MessageCircle, Palette, Settings, X } from "lucide-react";
 
@@ -41,6 +41,11 @@ type SpaceExperienceProps = {
   canChangeTheme?: boolean;
   showSettingsMenu?: boolean;
   allowPreviewDrag?: boolean;
+  showEntranceEffect?: boolean;
+};
+
+type InternalSpaceExperienceProps = SpaceExperienceProps & {
+  entranceEffectActive?: boolean;
 };
 
 type AlbumPageResponse = {
@@ -66,9 +71,27 @@ type MobileReadMode = "SCENE" | "LIST";
 type ScenePosition = { x: number; y: number };
 type ScenePositionMap = Record<number, ScenePosition>;
 type SceneDragBounds = { minX: number; maxX: number; minY: number; maxY: number };
+type EntranceEffectKind = "big-bang" | "campfire" | "petal" | "wave" | "leaf" | "snow" | "film" | "party";
+type EntranceParticleStyle = CSSProperties & Record<`--${string}`, string | number>;
+type EntranceParticle = {
+  id: string;
+  descriptor: SceneObjectDescriptor;
+  desktopX: string;
+  desktopY: string;
+  mobileX: string;
+  mobileY: string;
+  size: number;
+  delay: number;
+  duration: number;
+  rotation: number;
+  endRotation: number;
+  scale: number;
+  opacity: number;
+};
 
 const DESKTOP_DRAG_BOUNDS: SceneDragBounds = { minX: -560, maxX: 560, minY: -300, maxY: 300 };
 const MOBILE_DRAG_BOUNDS: SceneDragBounds = { minX: -330, maxX: 330, minY: -190, maxY: 170 };
+const ENTRANCE_EFFECT_DURATION_MS = 3600;
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -282,6 +305,257 @@ function getNoteDescriptor(themeKey: string, viewport: "desktop" | "mobile", pos
   });
 }
 
+function getEntranceEffectKind(themeKey: string): EntranceEffectKind {
+  switch (getSpaceTheme(themeKey).key) {
+    case "camping_night":
+      return "campfire";
+    case "spring_petals":
+      return "petal";
+    case "summer_sea":
+      return "wave";
+    case "autumn_leaves":
+      return "leaf";
+    case "winter_snow":
+      return "snow";
+    case "film_polaroid":
+      return "film";
+    case "birthday_party":
+      return "party";
+    case "galaxy":
+    default:
+      return "big-bang";
+  }
+}
+
+function getEntranceSettings(effect: EntranceEffectKind, accentColor: string) {
+  const defaults = {
+    desktopLeft: "50%",
+    desktopTop: "50%",
+    mobileLeft: "50%",
+    mobileTop: "52%",
+    coreWidth: "34vmin",
+    coreHeight: "34vmin",
+    coreBackground: `radial-gradient(circle, rgba(255,255,255,0.95), ${accentColor} 34%, transparent 70%)`,
+    ringColor: `${accentColor}88`,
+    glowColor: `${accentColor}66`,
+  };
+
+  switch (effect) {
+    case "campfire":
+      return {
+        ...defaults,
+        desktopTop: "76%",
+        mobileTop: "76%",
+        coreWidth: "28vmin",
+        coreHeight: "42vmin",
+        coreBackground: "radial-gradient(ellipse at 50% 72%, rgba(255,247,237,0.96), rgba(251,146,60,0.82) 34%, rgba(127,29,29,0.18) 70%, transparent 78%)",
+        ringColor: "rgba(251,146,60,0.72)",
+        glowColor: "rgba(249,115,22,0.56)",
+      };
+    case "petal":
+      return {
+        ...defaults,
+        desktopTop: "47%",
+        mobileTop: "54%",
+        coreBackground: "radial-gradient(circle, rgba(255,241,242,0.94), rgba(244,114,182,0.58) 38%, transparent 72%)",
+        ringColor: "rgba(251,207,232,0.72)",
+        glowColor: "rgba(244,114,182,0.48)",
+      };
+    case "wave":
+      return {
+        ...defaults,
+        desktopTop: "78%",
+        mobileTop: "78%",
+        coreWidth: "72vmin",
+        coreHeight: "24vmin",
+        coreBackground: "radial-gradient(ellipse at 50% 70%, rgba(236,254,255,0.9), rgba(34,211,238,0.56) 42%, transparent 74%)",
+        ringColor: "rgba(165,243,252,0.68)",
+        glowColor: "rgba(6,182,212,0.5)",
+      };
+    case "leaf":
+      return {
+        ...defaults,
+        desktopLeft: "34%",
+        desktopTop: "38%",
+        mobileLeft: "40%",
+        mobileTop: "42%",
+        coreBackground: "radial-gradient(circle, rgba(254,243,199,0.9), rgba(245,158,11,0.56) 38%, transparent 72%)",
+        ringColor: "rgba(251,191,36,0.66)",
+        glowColor: "rgba(180,83,9,0.48)",
+      };
+    case "snow":
+      return {
+        ...defaults,
+        desktopTop: "35%",
+        mobileTop: "38%",
+        coreBackground: "radial-gradient(circle, rgba(248,250,252,0.98), rgba(147,197,253,0.56) 38%, transparent 72%)",
+        ringColor: "rgba(219,234,254,0.78)",
+        glowColor: "rgba(191,219,254,0.54)",
+      };
+    case "film":
+      return {
+        ...defaults,
+        coreWidth: "48vmin",
+        coreHeight: "32vmin",
+        coreBackground: "radial-gradient(ellipse, rgba(255,251,235,0.96), rgba(245,158,11,0.48) 38%, rgba(41,37,36,0.18) 68%, transparent 76%)",
+        ringColor: "rgba(254,243,199,0.68)",
+        glowColor: "rgba(245,158,11,0.48)",
+      };
+    case "party":
+      return {
+        ...defaults,
+        desktopTop: "46%",
+        mobileTop: "48%",
+        coreWidth: "46vmin",
+        coreHeight: "46vmin",
+        coreBackground: "radial-gradient(circle, rgba(255,255,255,0.96), rgba(236,72,153,0.6) 34%, rgba(250,204,21,0.32) 58%, transparent 76%)",
+        ringColor: "rgba(252,231,243,0.78)",
+        glowColor: "rgba(236,72,153,0.52)",
+      };
+    case "big-bang":
+    default:
+      return defaults;
+  }
+}
+
+function getEntranceOffset(effect: EntranceEffectKind, seed: string, index: number, total: number, viewport: "desktop" | "mobile") {
+  const angle = (index / total) * Math.PI * 2 + sceneRandomRange(`${seed}:${viewport}:angle`, -0.42, 0.42);
+  const radiusX = sceneRandomRange(`${seed}:${viewport}:radius-x`, viewport === "desktop" ? 28 : 30, viewport === "desktop" ? 48 : 44);
+  const radiusY = sceneRandomRange(`${seed}:${viewport}:radius-y`, viewport === "desktop" ? 18 : 20, viewport === "desktop" ? 34 : 32);
+  const vw = (value: number) => `${Number(value.toFixed(2))}vw`;
+  const vh = (value: number) => `${Number(value.toFixed(2))}vh`;
+
+  switch (effect) {
+    case "campfire":
+      return {
+        x: vw(sceneRandomRange(`${seed}:${viewport}:x`, viewport === "desktop" ? -32 : -44, viewport === "desktop" ? 32 : 44)),
+        y: vh(sceneRandomRange(`${seed}:${viewport}:y`, viewport === "desktop" ? -66 : -58, viewport === "desktop" ? -20 : -14)),
+      };
+    case "wave":
+      return {
+        x: vw(sceneRandomRange(`${seed}:${viewport}:x`, viewport === "desktop" ? -48 : -54, viewport === "desktop" ? 48 : 54)),
+        y: vh(sceneRandomRange(`${seed}:${viewport}:y`, viewport === "desktop" ? -46 : -42, viewport === "desktop" ? -12 : -8)),
+      };
+    case "petal":
+      return {
+        x: vw(Math.cos(angle) * radiusX + sceneRandomRange(`${seed}:${viewport}:wind`, viewport === "desktop" ? 10 : 4, viewport === "desktop" ? 24 : 16)),
+        y: vh(Math.sin(angle) * radiusY + sceneRandomRange(`${seed}:${viewport}:drop`, -6, 14)),
+      };
+    case "leaf":
+      return {
+        x: vw(Math.cos(angle) * radiusX + sceneRandomRange(`${seed}:${viewport}:gust`, viewport === "desktop" ? 12 : 8, viewport === "desktop" ? 36 : 24)),
+        y: vh(Math.sin(angle) * radiusY + sceneRandomRange(`${seed}:${viewport}:fall`, 6, 26)),
+      };
+    case "snow":
+      return {
+        x: vw(Math.cos(angle) * radiusX + sceneRandomRange(`${seed}:${viewport}:drift`, -10, 10)),
+        y: vh(Math.sin(angle) * radiusY + sceneRandomRange(`${seed}:${viewport}:settle`, 8, 28)),
+      };
+    case "film":
+      return {
+        x: vw(Math.cos(angle) * sceneRandomRange(`${seed}:${viewport}:film-x`, viewport === "desktop" ? 22 : 24, viewport === "desktop" ? 42 : 38)),
+        y: vh(Math.sin(angle) * sceneRandomRange(`${seed}:${viewport}:film-y`, viewport === "desktop" ? 12 : 14, viewport === "desktop" ? 28 : 24)),
+      };
+    case "party":
+      return {
+        x: vw(Math.cos(angle) * radiusX + sceneRandomRange(`${seed}:${viewport}:scatter`, -8, 8)),
+        y: vh(Math.sin(angle) * radiusY + sceneRandomRange(`${seed}:${viewport}:fall`, viewport === "desktop" ? 0 : 4, viewport === "desktop" ? 18 : 22)),
+      };
+    case "big-bang":
+    default:
+      return {
+        x: vw(Math.cos(angle) * radiusX),
+        y: vh(Math.sin(angle) * radiusY),
+      };
+  }
+}
+
+function getEntranceParticles(themeKey: string, posts: SpacePostForTheme[]) {
+  const messages = posts.filter((post) => !isAlbumPost(post));
+  const effect = getEntranceEffectKind(themeKey);
+  const count = Math.round(clampNumber(Math.max(24, messages.length * 3 + 12), 24, 56));
+
+  return Array.from({ length: count }).map<EntranceParticle>((_, index) => {
+    const post = messages[index % Math.max(1, messages.length)];
+    const postSeed = post ? String(post.id) : "empty";
+    const seed = `${themeKey}:entrance:${postSeed}:${index}`;
+    const descriptor = getSceneObjectDescriptor({ themeKey, seed, interactive: true });
+    const desktopOffset = getEntranceOffset(effect, seed, index, count, "desktop");
+    const mobileOffset = getEntranceOffset(effect, seed, index, count, "mobile");
+
+    return {
+      id: seed,
+      descriptor,
+      desktopX: desktopOffset.x,
+      desktopY: desktopOffset.y,
+      mobileX: mobileOffset.x,
+      mobileY: mobileOffset.y,
+      size: Math.round(sceneRandomRange(`${seed}:size`, 16, effect === "party" ? 46 : 40)),
+      delay: Math.round(sceneRandomRange(`${seed}:delay`, 0, 520)),
+      duration: Math.round(sceneRandomRange(`${seed}:duration`, 1900, 3100)),
+      rotation: Math.round(sceneRandomRange(`${seed}:rotation`, -80, 80)),
+      endRotation: Math.round(sceneRandomRange(`${seed}:end-rotation`, 160, 540)),
+      scale: Number(sceneRandomRange(`${seed}:scale`, 0.76, 1.8).toFixed(2)),
+      opacity: Number(sceneRandomRange(`${seed}:opacity`, 0.64, 0.98).toFixed(2)),
+    };
+  });
+}
+
+function SpaceEntranceEffect({ themeKey, posts, onComplete }: { themeKey: string; posts: SpacePostForTheme[]; onComplete: () => void }) {
+  const theme = getSpaceTheme(themeKey);
+  const effect = getEntranceEffectKind(theme.key);
+  const particles = useMemo(() => getEntranceParticles(theme.key, posts), [theme.key, posts]);
+  const settings = getEntranceSettings(effect, theme.accentColor);
+  const layerStyle: EntranceParticleStyle = {
+    "--entrance-desktop-left": settings.desktopLeft,
+    "--entrance-desktop-top": settings.desktopTop,
+    "--entrance-mobile-left": settings.mobileLeft,
+    "--entrance-mobile-top": settings.mobileTop,
+    "--entrance-core-width": settings.coreWidth,
+    "--entrance-core-height": settings.coreHeight,
+    "--entrance-core-background": settings.coreBackground,
+    "--entrance-ring-color": settings.ringColor,
+    "--entrance-glow-color": settings.glowColor,
+  };
+
+  useEffect(() => {
+    const timer = window.setTimeout(onComplete, ENTRANCE_EFFECT_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [onComplete]);
+
+  return (
+    <div className={`space-entrance space-entrance-effect-${effect}`} style={layerStyle} aria-hidden="true">
+      <div className="space-entrance-core" />
+      <div className="space-entrance-wave" />
+      {particles.map((particle) => {
+        const particleStyle: EntranceParticleStyle = {
+          "--desktop-x": particle.desktopX,
+          "--desktop-y": particle.desktopY,
+          "--mobile-x": particle.mobileX,
+          "--mobile-y": particle.mobileY,
+          "--particle-size": `${particle.size}px`,
+          "--particle-opacity": particle.opacity,
+          "--particle-scale": particle.scale,
+          "--particle-rotate": `${particle.rotation}deg`,
+          "--particle-end-rotate": `${particle.endRotation}deg`,
+          "--particle-delay": `${particle.delay}ms`,
+          "--particle-duration": `${particle.duration}ms`,
+          color: particle.descriptor.color,
+          filter: `drop-shadow(0 0 12px ${particle.descriptor.glowColor}) drop-shadow(0 0 28px ${particle.descriptor.glowColor})`,
+        };
+
+        return (
+          <span key={particle.id} className="space-entrance-particle" style={particleStyle}>
+            <span className="space-entrance-particle-shape">
+              <SceneShapeView shape={particle.descriptor.shape} descriptor={particle.descriptor} />
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export function SpaceThemeBackground({ themeKey }: { themeKey: string }) {
   const theme = getSpaceTheme(themeKey);
 
@@ -439,6 +713,7 @@ export function SpaceExperience({
   canChangeTheme = false,
   showSettingsMenu = true,
   allowPreviewDrag = false,
+  showEntranceEffect = false,
 }: SpaceExperienceProps) {
   const albumFetcher = useFetcher<AlbumPageResponse>();
   const initialAlbumPosts = useMemo(() => posts.filter(isAlbumPost), [posts]);
@@ -446,12 +721,20 @@ export function SpaceExperience({
   const [albumPosts, setAlbumPosts] = useState<SpacePostForTheme[]>(initialAlbumPosts);
   const [albumCursor, setAlbumCursor] = useState<string | null>(initialAlbumPage?.nextCursor ?? null);
   const [albumHasMore, setAlbumHasMore] = useState(initialAlbumPage?.hasMore ?? false);
+  const [entranceEffectActive, setEntranceEffectActive] = useState(showEntranceEffect);
+  const finishEntranceEffect = useCallback(() => {
+    setEntranceEffectActive(false);
+  }, []);
 
   useEffect(() => {
     setAlbumPosts(initialAlbumPosts);
     setAlbumCursor(initialAlbumPage?.nextCursor ?? null);
     setAlbumHasMore(initialAlbumPage?.hasMore ?? false);
   }, [initialAlbumKey, initialAlbumPage?.nextCursor, initialAlbumPage?.hasMore]);
+
+  useEffect(() => {
+    setEntranceEffectActive(showEntranceEffect);
+  }, [showEntranceEffect, space.id, space.themeKey]);
 
   useEffect(() => {
     const albumPage = albumFetcher.data?.albumPage;
@@ -476,6 +759,7 @@ export function SpaceExperience({
   return (
     <main className="relative min-h-screen overflow-hidden">
       <SpaceThemeBackground themeKey={space.themeKey} />
+      {showEntranceEffect && entranceEffectActive && <SpaceEntranceEffect key={`${space.id}:${space.themeKey}`} themeKey={space.themeKey} posts={posts} onComplete={finishEntranceEffect} />}
       <div className="hidden md:block">
         <DesktopSpaceExperience
           space={space}
@@ -488,6 +772,7 @@ export function SpaceExperience({
           canChangeTheme={canChangeTheme}
           showSettingsMenu={showSettingsMenu}
           allowPreviewDrag={allowPreviewDrag}
+          entranceEffectActive={entranceEffectActive}
         />
       </div>
       <div className="block md:hidden">
@@ -502,6 +787,7 @@ export function SpaceExperience({
           canChangeTheme={canChangeTheme}
           showSettingsMenu={showSettingsMenu}
           allowPreviewDrag={allowPreviewDrag}
+          entranceEffectActive={entranceEffectActive}
         />
       </div>
     </main>
@@ -519,7 +805,8 @@ function DesktopSpaceExperience({
   canChangeTheme,
   showSettingsMenu = true,
   allowPreviewDrag = false,
-}: SpaceExperienceProps & AlbumPaginationProps) {
+  entranceEffectActive = false,
+}: InternalSpaceExperienceProps & AlbumPaginationProps) {
   const theme = getSpaceTheme(space.themeKey);
   const positionFetcher = useFetcher();
   const [view, setView] = useState<SurfaceView>(initialView);
@@ -595,7 +882,7 @@ function DesktopSpaceExperience({
       </header>
 
       {view === "MEMORY" ? (
-        <section className="relative h-[calc(100vh-140px)]">
+        <section className={`relative h-[calc(100vh-140px)] ${entranceEffectActive ? "space-memory-entrance-reveal" : ""}`}>
           <div className="absolute left-1/2 top-1/2 h-px w-px">
             {messages.map((post, index) => (
               <DesktopMemoryObject
@@ -648,7 +935,8 @@ function MobileSpaceExperience({
   canChangeTheme,
   showSettingsMenu = true,
   allowPreviewDrag = false,
-}: SpaceExperienceProps & AlbumPaginationProps) {
+  entranceEffectActive = false,
+}: InternalSpaceExperienceProps & AlbumPaginationProps) {
   const theme = getSpaceTheme(space.themeKey);
   const positionFetcher = useFetcher();
   const [view, setView] = useState<SurfaceView>(initialView);
@@ -725,7 +1013,7 @@ function MobileSpaceExperience({
       </header>
 
       {view === "MEMORY" && readMode === "SCENE" && (
-        <MobileSceneScroller resetKey={`${space.id}:${space.themeKey}:${messages.length}`}>
+        <MobileSceneScroller resetKey={`${space.id}:${space.themeKey}:${messages.length}`} revealOnEntrance={entranceEffectActive}>
           {messages.map((post, index) => (
             <MobileMemoryObject
               key={post.id}
@@ -828,7 +1116,7 @@ function MobileReadModeTabs({ mode, setMode }: { mode: MobileReadMode; setMode: 
   );
 }
 
-function MobileSceneScroller({ resetKey, children }: { resetKey: string; children: ReactNode }) {
+function MobileSceneScroller({ resetKey, children, revealOnEntrance = false }: { resetKey: string; children: ReactNode; revealOnEntrance?: boolean }) {
   const scrollerRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -845,7 +1133,9 @@ function MobileSceneScroller({ resetKey, children }: { resetKey: string; childre
   return (
     <section
       ref={scrollerRef}
-      className="-mx-4 h-[58vh] min-h-[430px] overflow-x-auto overflow-y-hidden overscroll-x-contain pb-6 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className={`-mx-4 h-[58vh] min-h-[430px] overflow-x-auto overflow-y-hidden overscroll-x-contain pb-6 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
+        revealOnEntrance ? "space-memory-entrance-reveal" : ""
+      }`}
     >
       <div className="relative mx-auto h-full w-[195vw] min-w-[760px] max-w-[860px]">{children}</div>
     </section>

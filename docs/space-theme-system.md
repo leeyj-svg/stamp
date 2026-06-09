@@ -16,6 +16,14 @@
 - Shared helpers such as album image frames and theme motifs should stay in `SpaceExperience.tsx` unless they grow large enough to move into a dedicated component.
 - The current desktop album patterns are constellation board, camp photo line, petal postcard wall, sea gallery, autumn scrapbook, frosted gallery, film contact sheet, and party wall.
 
+## Entrance Effect Rule
+
+- The public recipient SPACE route (`/space/:spaceId`) plays a short theme entrance effect whenever the unlocked SPACE screen opens.
+- The writer-only preview route (`/space/:spaceId/mine`) does not play the entrance effect.
+- Memory note objects stay hidden at the start of the entrance effect, then reveal while the theme particles burst outward.
+- Desktop and mobile use separate particle offsets through CSS media queries while sharing the same theme object shapes.
+- Users with reduced-motion preferences should not receive the entrance burst or note reveal animation.
+
 ## Album Performance Rule
 
 - SPACE should not load every album photo at once.
