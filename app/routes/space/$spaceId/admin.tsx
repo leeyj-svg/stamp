@@ -7,7 +7,7 @@ import { Link as LinkIcon, RefreshCw, Search, Trash2, Wand2 } from "lucide-react
 import { SpaceThemePicker } from "~/components/space/SpaceExperience";
 import { getSessionWithPermission } from "~/lib/auth.server";
 import { db } from "~/lib/db.server";
-import { generateAiMessages } from "~/lib/gemini.server";
+import { generateAiMessages, parseGeminiModelQuality } from "~/lib/gemini.server";
 import { parseKoreanDateInput } from "~/lib/space-date";
 import { isSpaceThemeKey } from "~/lib/space-theme";
 import { applySpaceTheme, regeneratePostAppearances, upsertPostAppearancesForPost } from "~/lib/space-theme.server";
@@ -212,6 +212,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const name = String(formData.get("name") || "").trim();
     const age = String(formData.get("age") || "").trim();
     const gender = formData.get("gender") === "male" ? "male" : "female";
+    const modelQuality = parseGeminiModelQuality(formData.get("modelQuality"));
     if (!topic || !name || !age || Number.isNaN(count)) return { error: "AI 메시지 생성 정보를 입력해 주세요." };
 
     const space = await db.memorySpace.findUnique({
@@ -220,7 +221,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
     });
     if (!space) throw new Response("Not Found", { status: 404 });
 
-    const messages = await generateAiMessages(topic, count, { name, age, gender });
+    const messages = await generateAiMessages(topic, count, { name, age, gender }, modelQuality);
 
     await db.$transaction(async (tx) => {
       for (const msg of messages as GeneratedMessage[]) {
@@ -442,6 +443,10 @@ export default function SpaceAdminPage() {
                   <select name="gender" className="w-full rounded border p-2 text-xs">
                     <option value="male">남성</option>
                     <option value="female">여성</option>
+                  </select>
+                  <select name="modelQuality" className="w-full rounded border p-2 text-xs" defaultValue="standard">
+                    <option value="standard">기본</option>
+                    <option value="quality">고품질</option>
                   </select>
                   <input name="topic" placeholder="주제 (예: 생일, 응원)" className="w-full min-w-0 rounded border p-2 text-xs" required />
                   <div className="grid grid-cols-[1fr_auto] gap-2">

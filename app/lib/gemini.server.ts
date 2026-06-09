@@ -28,10 +28,12 @@ type OptimizedLayout = {
   aiStyle: AiStyle;
 };
 
+export type GeminiModelQuality = "standard" | "quality";
+
 let geminiClient: GoogleGenAI | null | undefined;
 
-const GEMINI_PRO_MODEL = "gemini-3.1-pro-preview";
-const GEMINI_FLASH_MODEL = "gemini-3.5-flash";
+const GEMINI_STANDARD_MODEL = process.env.GEMINI_STANDARD_MODEL?.trim() || "gemini-3.1-flash-lite";
+const GEMINI_QUALITY_MODEL = process.env.GEMINI_QUALITY_MODEL?.trim() || "gemini-3.5-flash";
 
 const messageSchema = {
   type: Type.OBJECT,
@@ -197,6 +199,14 @@ const ledgerGeneralQuestionSchema = {
 
 export function hasGeminiApiKey() {
   return Boolean(process.env.GEMINI_API_KEY);
+}
+
+export function parseGeminiModelQuality(value: unknown): GeminiModelQuality {
+  return value === "quality" ? "quality" : "standard";
+}
+
+function getGeminiModel(quality: GeminiModelQuality = "standard") {
+  return quality === "quality" ? GEMINI_QUALITY_MODEL : GEMINI_STANDARD_MODEL;
 }
 
 function getGeminiClient() {
@@ -481,6 +491,7 @@ export async function generateAiMessages(
   topic: string,
   count: number,
   targetInfo: { name: string; age: string; gender: "male" | "female" },
+  modelQuality: GeminiModelQuality = "standard",
 ) {
   const ai = getGeminiClient();
   if (!ai || count <= 0) {
@@ -489,7 +500,7 @@ export async function generateAiMessages(
 
   try {
     const response = await ai.models.generateContent({
-      model: GEMINI_PRO_MODEL,
+      model: getGeminiModel(modelQuality),
       config: {
         responseMimeType: "application/json",
         responseSchema: messageSchema,
@@ -534,7 +545,7 @@ Rules:
   }
 }
 
-export async function optimizeLayout(posts: { id: number | string; content: string }[]) {
+export async function optimizeLayout(posts: { id: number | string; content: string }[], modelQuality: GeminiModelQuality = "standard") {
   const ai = getGeminiClient();
   if (!ai || posts.length === 0) {
     return [];
@@ -542,7 +553,7 @@ export async function optimizeLayout(posts: { id: number | string; content: stri
 
   try {
     const response = await ai.models.generateContent({
-      model: GEMINI_FLASH_MODEL,
+      model: getGeminiModel(modelQuality),
       config: {
         responseMimeType: "application/json",
         responseSchema: layoutSchema,
@@ -580,7 +591,7 @@ Rules:
   }
 }
 
-export async function generateLedgerStatsSummary(snapshot: LedgerAiSummarySnapshot) {
+export async function generateLedgerStatsSummary(snapshot: LedgerAiSummarySnapshot, modelQuality: GeminiModelQuality = "standard") {
   const ai = getGeminiClient();
   if (!ai) {
     return null;
@@ -588,7 +599,7 @@ export async function generateLedgerStatsSummary(snapshot: LedgerAiSummarySnapsh
 
   try {
     const response = await ai.models.generateContent({
-      model: GEMINI_FLASH_MODEL,
+      model: getGeminiModel(modelQuality),
       config: {
         responseMimeType: "application/json",
         responseSchema: ledgerStatsSummarySchema,
@@ -636,7 +647,7 @@ ${JSON.stringify(snapshot, null, 2)}
   }
 }
 
-export async function generateLedgerPurchaseAdvice(snapshot: LedgerPurchaseAdviceSnapshot) {
+export async function generateLedgerPurchaseAdvice(snapshot: LedgerPurchaseAdviceSnapshot, modelQuality: GeminiModelQuality = "standard") {
   const ai = getGeminiClient();
   if (!ai) {
     return null;
@@ -644,7 +655,7 @@ export async function generateLedgerPurchaseAdvice(snapshot: LedgerPurchaseAdvic
 
   try {
     const response = await ai.models.generateContent({
-      model: GEMINI_FLASH_MODEL,
+      model: getGeminiModel(modelQuality),
       config: {
         responseMimeType: "application/json",
         responseSchema: ledgerPurchaseAdviceSchema,
@@ -693,7 +704,7 @@ ${JSON.stringify(snapshot, null, 2)}
   }
 }
 
-export async function generateLedgerGeneralQuestion(snapshot: LedgerGeneralQuestionSnapshot) {
+export async function generateLedgerGeneralQuestion(snapshot: LedgerGeneralQuestionSnapshot, modelQuality: GeminiModelQuality = "standard") {
   const ai = getGeminiClient();
   if (!ai) {
     return null;
@@ -701,7 +712,7 @@ export async function generateLedgerGeneralQuestion(snapshot: LedgerGeneralQuest
 
   try {
     const response = await ai.models.generateContent({
-      model: GEMINI_FLASH_MODEL,
+      model: getGeminiModel(modelQuality),
       config: {
         responseMimeType: "application/json",
         responseSchema: ledgerGeneralQuestionSchema,

@@ -35,7 +35,14 @@ import type {
   LedgerPurchaseAdviceResult,
   LedgerPurchaseAdviceSnapshot,
 } from "~/lib/ledger-ai";
-import { generateLedgerGeneralQuestion, generateLedgerPurchaseAdvice, generateLedgerStatsSummary, hasGeminiApiKey } from "~/lib/gemini.server";
+import {
+  generateLedgerGeneralQuestion,
+  generateLedgerPurchaseAdvice,
+  generateLedgerStatsSummary,
+  hasGeminiApiKey,
+  parseGeminiModelQuality,
+  type GeminiModelQuality,
+} from "~/lib/gemini.server";
 import { ensureLedgerSetup, getLedgerPeriodLabel, getLedgerReferenceDateForMonthToken, getMonthToken, shiftMonthToken } from "~/lib/ledger";
 import { cn } from "~/lib/utils";
 
@@ -45,6 +52,7 @@ type CategoryChartViewValue = "DONUT" | "BAR";
 type WeekStartDayValue = "MONDAY" | "SUNDAY";
 type LedgerStatsAiActionData = {
   requestKey: string;
+  modelQuality?: GeminiModelQuality;
   report?: LedgerAiSummarySnapshot;
   summary?: LedgerAiSummaryResult;
   error?: string;
@@ -52,6 +60,7 @@ type LedgerStatsAiActionData = {
 };
 type LedgerPurchaseAdviceActionData = {
   requestKey: string;
+  modelQuality?: GeminiModelQuality;
   question?: string;
   snapshot?: LedgerPurchaseAdviceSnapshot;
   advice?: LedgerPurchaseAdviceResult;
@@ -60,6 +69,7 @@ type LedgerPurchaseAdviceActionData = {
 };
 type LedgerGeneralQuestionActionData = {
   requestKey: string;
+  modelQuality?: GeminiModelQuality;
   question?: string;
   snapshot?: LedgerGeneralQuestionSnapshot;
   answer?: LedgerGeneralQuestionResult;
@@ -235,16 +245,31 @@ function getLedgerAiAnalysisModeOption(mode: LedgerAiAnalysisMode) {
   return LEDGER_AI_ANALYSIS_MODES.find((option) => option.id === mode) ?? LEDGER_AI_ANALYSIS_MODES[0];
 }
 
-function buildLedgerAiRequestKey(monthToken: string, filter: EntryFilterValue, mode: LedgerAiAnalysisMode) {
-  return `${monthToken}:${filter}:${mode}`;
+function buildLedgerAiRequestKey(
+  monthToken: string,
+  filter: EntryFilterValue,
+  mode: LedgerAiAnalysisMode,
+  modelQuality: GeminiModelQuality,
+) {
+  return `${monthToken}:${filter}:${mode}:${modelQuality}`;
 }
 
-function buildLedgerPurchaseAdviceRequestKey(monthToken: string, filter: EntryFilterValue, question: string) {
-  return `${monthToken}:${filter}:${question.trim().toLowerCase()}`;
+function buildLedgerPurchaseAdviceRequestKey(
+  monthToken: string,
+  filter: EntryFilterValue,
+  question: string,
+  modelQuality: GeminiModelQuality,
+) {
+  return `${monthToken}:${filter}:${modelQuality}:${question.trim().toLowerCase()}`;
 }
 
-function buildLedgerGeneralQuestionRequestKey(monthToken: string, filter: EntryFilterValue, question: string) {
-  return `${monthToken}:${filter}:general:${question.trim().toLowerCase()}`;
+function buildLedgerGeneralQuestionRequestKey(
+  monthToken: string,
+  filter: EntryFilterValue,
+  question: string,
+  modelQuality: GeminiModelQuality,
+) {
+  return `${monthToken}:${filter}:general:${modelQuality}:${question.trim().toLowerCase()}`;
 }
 
 function getMonthStart(monthToken: string) {
@@ -1161,10 +1186,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     parseMonthToken(typeof formData.get("monthToken") === "string" ? String(formData.get("monthToken")) : null) ??
     getMonthToken(new Date());
   const selectedFilter = parseEntryFilter(typeof formData.get("type") === "string" ? String(formData.get("type")) : null);
+  const modelQuality = parseGeminiModelQuality(formData.get("modelQuality"));
 
   if (intent === "ask_general_question") {
     const question = typeof formData.get("question") === "string" ? String(formData.get("question")).trim() : "";
-    const requestKey = buildLedgerGeneralQuestionRequestKey(monthToken, selectedFilter, question);
+    const requestKey = buildLedgerGeneralQuestionRequestKey(monthToken, selectedFilter, question, modelQuality);
 
     if (question.length < 2) {
       return {
@@ -1257,7 +1283,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       } satisfies LedgerGeneralQuestionActionData;
     }
 
-    const answer = await generateLedgerGeneralQuestion(snapshot);
+    const answer = await generateLedgerGeneralQuestion(snapshot, modelQuality);
     if (!answer) {
       return {
         requestKey,
@@ -1269,6 +1295,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     return {
       requestKey,
+      modelQuality,
       question,
       snapshot,
       answer,
@@ -1278,7 +1305,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "ask_purchase_advice") {
     const question = typeof formData.get("question") === "string" ? String(formData.get("question")).trim() : "";
-    const requestKey = buildLedgerPurchaseAdviceRequestKey(monthToken, selectedFilter, question);
+    const requestKey = buildLedgerPurchaseAdviceRequestKey(monthToken, selectedFilter, question, modelQuality);
 
     if (question.length < 2) {
       return {
@@ -1370,7 +1397,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       } satisfies LedgerPurchaseAdviceActionData;
     }
 
-    const advice = await generateLedgerPurchaseAdvice(snapshot);
+    const advice = await generateLedgerPurchaseAdvice(snapshot, modelQuality);
     if (!advice) {
       return {
         requestKey,
@@ -1382,6 +1409,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     return {
       requestKey,
+      modelQuality,
       question,
       snapshot,
       advice,
@@ -1390,7 +1418,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const analysisMode = parseLedgerAiAnalysisMode(formData.get("analysisMode"));
-  const requestKey = buildLedgerAiRequestKey(monthToken, selectedFilter, analysisMode);
+  const requestKey = buildLedgerAiRequestKey(monthToken, selectedFilter, analysisMode, modelQuality);
 
   if (!hasGeminiApiKey()) {
     return {
@@ -1472,7 +1500,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     } satisfies LedgerStatsAiActionData;
   }
 
-  const summary = await generateLedgerStatsSummary(report);
+  const summary = await generateLedgerStatsSummary(report, modelQuality);
   if (!summary) {
     return {
       requestKey,
@@ -1483,6 +1511,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   return {
     requestKey,
+    modelQuality,
     report,
     summary,
     generatedAt: new Date().toISOString(),
@@ -1948,6 +1977,7 @@ export default function LedgerStatsPage() {
   const [selectedTagCategoryIds, setSelectedTagCategoryIds] = useState<number[]>([]);
   const [tagMetric, setTagMetric] = useState<TagMetricValue>("COUNT");
   const [aiAnalysisMode, setAiAnalysisMode] = useState<LedgerAiAnalysisMode>("OVERVIEW");
+  const [geminiModelQuality, setGeminiModelQuality] = useState<GeminiModelQuality>("standard");
   const activeCategorySection = useMemo(() => {
     if (selectedFilter !== "ALL") {
       return categorySections[0] ?? null;
@@ -2278,8 +2308,8 @@ export default function LedgerStatsPage() {
   }, [activeMonthlyGoalBudgetCard?.target, categoryBudgetSections, entries, monthlyGoalFocusType, selectedFilter, statsRangeLabel]);
   const selectedAiAnalysisMode = getLedgerAiAnalysisModeOption(aiAnalysisMode);
   const aiSummaryRequestKey = useMemo(
-    () => buildLedgerAiRequestKey(monthToken, selectedFilter, aiAnalysisMode),
-    [monthToken, selectedFilter, aiAnalysisMode],
+    () => buildLedgerAiRequestKey(monthToken, selectedFilter, aiAnalysisMode, geminiModelQuality),
+    [monthToken, selectedFilter, aiAnalysisMode, geminiModelQuality],
   );
   const aiSummaryData = aiSummaryFetcher.data?.requestKey === aiSummaryRequestKey ? aiSummaryFetcher.data : null;
   const isAiSummaryLoading =
@@ -2287,7 +2317,8 @@ export default function LedgerStatsPage() {
     aiSummaryFetcher.formData?.get("intent") === "generate_ai_summary" &&
     aiSummaryFetcher.formData?.get("monthToken") === monthToken &&
     String(aiSummaryFetcher.formData?.get("type") ?? "ALL") === selectedFilter &&
-    String(aiSummaryFetcher.formData?.get("analysisMode") ?? "OVERVIEW") === aiAnalysisMode;
+    String(aiSummaryFetcher.formData?.get("analysisMode") ?? "OVERVIEW") === aiAnalysisMode &&
+    String(aiSummaryFetcher.formData?.get("modelQuality") ?? "standard") === geminiModelQuality;
   const canRequestAiSummary = filteredEntries.length > 0;
   const requestAiSummary = () => {
     aiSummaryFetcher.submit(
@@ -2296,6 +2327,7 @@ export default function LedgerStatsPage() {
         monthToken,
         type: selectedFilter,
         analysisMode: aiAnalysisMode,
+        modelQuality: geminiModelQuality,
       },
       { method: "post" },
     );
@@ -2499,6 +2531,32 @@ export default function LedgerStatsPage() {
         {statsTab === "ANALYSIS" ? (
           <>
             <StatSection title="Gemini 기간 정리" description="버튼을 누를 때만 Gemini로 최신 기간 데이터를 정리해요.">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                <div>
+                  <p className="text-[0.76rem] font-semibold text-slate-800">Gemini 모델</p>
+                  <p className="mt-0.5 text-[0.66rem] text-slate-500">
+                    {geminiModelQuality === "quality" ? "고품질 응답" : "기본 응답"}
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 rounded-lg bg-white p-1 shadow-sm">
+                  {([
+                    { id: "standard", label: "기본" },
+                    { id: "quality", label: "고품질" },
+                  ] as const).map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => setGeminiModelQuality(option.id)}
+                      className={cn(
+                        "rounded-md px-3 py-1.5 text-[0.68rem] font-semibold transition-colors",
+                        geminiModelQuality === option.id ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-100",
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="mb-4 grid gap-2 md:grid-cols-3">
                 {LEDGER_AI_ANALYSIS_MODES.map((mode) => {
                   const isActive = mode.id === aiAnalysisMode;
@@ -2535,12 +2593,17 @@ export default function LedgerStatsPage() {
                 <CategoryBudgetQuestionBox sections={categoryBudgetSections} selectedFilterLabel={selectedFilterLabel} />
               </div>
               <div className="mt-4">
-                <LedgerGeneralQuestionBox monthToken={monthToken} selectedFilter={selectedFilter} />
+                <LedgerGeneralQuestionBox
+                  monthToken={monthToken}
+                  selectedFilter={selectedFilter}
+                  modelQuality={geminiModelQuality}
+                />
               </div>
               <div className="mt-4">
                 <PurchaseBudgetAdviceBox
                   monthToken={monthToken}
                   selectedFilter={selectedFilter}
+                  modelQuality={geminiModelQuality}
                   sections={categoryBudgetSections}
                 />
               </div>
@@ -3723,20 +3786,23 @@ function getPurchaseAdviceVerdictTone(verdict: LedgerPurchaseAdviceResult["verdi
 function LedgerGeneralQuestionBox({
   monthToken,
   selectedFilter,
+  modelQuality,
 }: {
   monthToken: string;
   selectedFilter: EntryFilterValue;
+  modelQuality: GeminiModelQuality;
 }) {
   const questionFetcher = useFetcher<LedgerGeneralQuestionActionData>();
   const [question, setQuestion] = useState("");
   const trimmedQuestion = question.trim();
-  const requestPrefix = `${monthToken}:${selectedFilter}:general:`;
+  const requestPrefix = `${monthToken}:${selectedFilter}:general:${modelQuality}:`;
   const questionData = questionFetcher.data?.requestKey.startsWith(requestPrefix) ? questionFetcher.data : null;
   const isLoading =
     questionFetcher.state !== "idle" &&
     questionFetcher.formData?.get("intent") === "ask_general_question" &&
     questionFetcher.formData?.get("monthToken") === monthToken &&
-    String(questionFetcher.formData?.get("type") ?? "ALL") === selectedFilter;
+    String(questionFetcher.formData?.get("type") ?? "ALL") === selectedFilter &&
+    String(questionFetcher.formData?.get("modelQuality") ?? "standard") === modelQuality;
   const answer = questionData?.answer ?? null;
   const examples = [
     "이번 달 소비에서 제일 조심할 부분이 뭐야?",
@@ -3756,6 +3822,7 @@ function LedgerGeneralQuestionBox({
         monthToken,
         type: selectedFilter,
         question: trimmedQuestion,
+        modelQuality,
       },
       { method: "post" },
     );
@@ -3887,22 +3954,25 @@ function LedgerGeneralQuestionBox({
 function PurchaseBudgetAdviceBox({
   monthToken,
   selectedFilter,
+  modelQuality,
   sections,
 }: {
   monthToken: string;
   selectedFilter: EntryFilterValue;
+  modelQuality: GeminiModelQuality;
   sections: CategoryBudgetUsageSection[];
 }) {
   const adviceFetcher = useFetcher<LedgerPurchaseAdviceActionData>();
   const [question, setQuestion] = useState("");
   const trimmedQuestion = question.trim();
-  const requestPrefix = `${monthToken}:${selectedFilter}:`;
+  const requestPrefix = `${monthToken}:${selectedFilter}:${modelQuality}:`;
   const adviceData = adviceFetcher.data?.requestKey.startsWith(requestPrefix) ? adviceFetcher.data : null;
   const isLoading =
     adviceFetcher.state !== "idle" &&
     adviceFetcher.formData?.get("intent") === "ask_purchase_advice" &&
     adviceFetcher.formData?.get("monthToken") === monthToken &&
-    String(adviceFetcher.formData?.get("type") ?? "ALL") === selectedFilter;
+    String(adviceFetcher.formData?.get("type") ?? "ALL") === selectedFilter &&
+    String(adviceFetcher.formData?.get("modelQuality") ?? "standard") === modelQuality;
   const exampleItems = useMemo(
     () =>
       sections
@@ -3930,6 +4000,7 @@ function PurchaseBudgetAdviceBox({
         monthToken,
         type: selectedFilter,
         question: trimmedQuestion,
+        modelQuality,
       },
       { method: "post" },
     );
