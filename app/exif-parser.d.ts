@@ -2,7 +2,7 @@
 
 declare module 'exif-parser' {
     interface ExifTags {
-        DateTimeOriginal?: number; // ???? ??? ?? ?? ?? (Unix Timestamp)
+        DateTimeOriginal?: number; // 사진 촬영 시각 태그 (Unix Timestamp)
         [key: string]: unknown;
     }
 
@@ -19,6 +19,6 @@ declare module 'exif-parser' {
         parse(): ExifResult;
     }
 
-    // create ??? ??? ?? ??? ?????.
+    // create 함수 타입을 직접 선언합니다.
     export function create(buffer: Buffer): ExifParser;
 }

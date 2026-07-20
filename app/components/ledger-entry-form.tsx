@@ -315,6 +315,7 @@ export function LedgerEntryForm({
   }, [selectedCategoryId, visibleCategories]);
 
   const numericAmount = Number(amountValue || "0");
+  const hasAmountValue = amountValue.length > 0;
 
   const appendAmount = (chunk: string) => {
     setAmountValue((prev) => normalizeAmountValue(`${prev}${chunk}`));
@@ -395,8 +396,8 @@ export function LedgerEntryForm({
       return;
     }
 
-    if (result <= 0) {
-      setCalculatorError("0보다 큰 결과만 넣을 수 있어요.");
+    if (result < 0) {
+      setCalculatorError("0원 이상만 넣을 수 있어요.");
       return;
     }
 
@@ -430,12 +431,19 @@ export function LedgerEntryForm({
           method="post"
           className="space-y-0 pb-[22rem]"
           onSubmit={(event) => {
-            if (numericAmount > 0) {
+            if (!hasAmountValue) {
+              event.preventDefault();
+              setAmountError("금액을 입력해 주세요.");
+              setIsAmountPadOpen(true);
+              return;
+            }
+
+            if (numericAmount >= 0) {
               return;
             }
 
             event.preventDefault();
-            setAmountError("금액을 입력해 주세요.");
+            setAmountError("금액을 다시 확인해 주세요.");
             setIsAmountPadOpen(true);
           }}
         >
@@ -473,7 +481,7 @@ export function LedgerEntryForm({
                   onClick={openAmountPad}
                   className={cn(
                     "flex h-7 w-full items-center px-0 py-0 text-left text-[11px] font-normal tabular-nums md:text-[11px]",
-                    isAmountPadOpen ? tone.accent : numericAmount > 0 ? "text-slate-900" : "text-slate-400",
+                    isAmountPadOpen ? tone.accent : hasAmountValue ? "text-slate-900" : "text-slate-400",
                   )}
                   aria-label="금액 입력 열기"
                 >

@@ -893,15 +893,16 @@ export default function LedgerPage() {
   }, [budgetFocusType, budgetPeriods, budgetStatsEntries, settings.weekStartDay]);
 
   const dailySummaryByDate = useMemo(() => {
-    const grouped = new Map<string, { income: number; expense: number; saving: number }>();
+    const grouped = new Map<string, { income: number; expense: number; saving: number; zeroAmountCount: number }>();
 
     for (const entry of filteredEntries) {
       const key = getDateKey(new Date(entry.usedAt));
-      const current = grouped.get(key) ?? { income: 0, expense: 0, saving: 0 };
+      const current = grouped.get(key) ?? { income: 0, expense: 0, saving: 0, zeroAmountCount: 0 };
 
       if (entry.type === "INCOME") current.income += entry.amount;
       if (entry.type === "EXPENSE") current.expense += entry.amount;
       if (entry.type === "SAVING") current.saving += entry.amount;
+      if (entry.amount === 0) current.zeroAmountCount += 1;
 
       grouped.set(key, current);
     }
@@ -1535,7 +1536,7 @@ export default function LedgerPage() {
           }}
           components={{
             DayButton: ({ day, modifiers, className, ...props }) => {
-              const daySummary = dailySummaryByDate.get(getDateKey(day.date)) ?? { income: 0, expense: 0, saving: 0 };
+              const daySummary = dailySummaryByDate.get(getDateKey(day.date)) ?? { income: 0, expense: 0, saving: 0, zeroAmountCount: 0 };
               const dayBudget = budgetRemainingByDate.get(getDateKey(day.date)) ?? { day: null, week: null, month: null };
               const isBudgetStartDate = budgetStartDateTokens.has(getDateKey(day.date));
               const routineMarkers = routineMarkersByDate.get(getDateKey(day.date)) ?? [];
@@ -1603,8 +1604,18 @@ export default function LedgerPage() {
                           ) : null}
                         </div>
                       ) : null}
-                    </div>
+                  </div>
                   <div className="flex w-full flex-col items-end gap-0.5 text-right">
+                    {daySummary.zeroAmountCount > 0 ? (
+                      <span
+                        className={cn(
+                          "min-h-[0.72rem] rounded-full bg-amber-50 px-1 text-[0.52rem] font-semibold leading-[0.72rem] text-amber-700",
+                          isOutsideMonth && "opacity-60",
+                        )}
+                      >
+                        {daySummary.zeroAmountCount > 1 ? `0원 ${daySummary.zeroAmountCount}` : "0원"}
+                      </span>
+                    ) : null}
                     <span className={cn("min-h-[0.72rem] truncate text-[0.58rem] font-medium leading-none", isOutsideMonth ? "text-sky-300" : "text-sky-500")}>
                       {getDailyAmountText(daySummary.income)}
                     </span>

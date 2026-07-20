@@ -1960,7 +1960,7 @@ export async function updateDevWorkNote(db: DevlogDbClient, userId: string, _ref
 export async function deleteDevWorkNote(db: DevlogDbClient, userId: string, _referenceDate: Date, formData: FormData) {
   const noteId = parsePositiveInt(formData.get("noteId"));
   if (!noteId) {
-    throw new Error("?묒뾽 硫붾え瑜?李얠쓣 ???놁뼱??");
+    throw new Error("작업 메모를 찾을 수 없습니다.");
   }
 
   const existing = await requireWorkNote(db, userId, noteId);
@@ -2426,7 +2426,7 @@ export async function loadDevWorkItemWindow(db: DevlogDbClient, userId: string, 
   });
 
   if (!workItemScope) {
-    throw new Response("?묒뾽李쎌쓣 李얠쓣 ???놁뼱??", { status: 404 });
+    throw new Response("작업창을 찾을 수 없습니다.", { status: 404 });
   }
 
   const [page, workItem, relatedWorkItems, currentPageEntry, workSets] = await Promise.all([

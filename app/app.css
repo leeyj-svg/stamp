@@ -134,3 +134,322 @@ body {
     @apply bg-background text-foreground;
   }
 }
+
+@keyframes spaceSceneTwinkle {
+  0%, 100% {
+    opacity: var(--scene-opacity, 0.82);
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translate3d(0, -4px, 0) scale(1.16);
+  }
+}
+
+@keyframes spaceSceneSway {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) rotate(-4deg);
+  }
+  50% {
+    transform: translate3d(12px, 8px, 0) rotate(7deg);
+  }
+}
+
+@keyframes spaceSceneFall {
+  0%, 100% {
+    transform: translate3d(0, -8px, 0) rotate(-7deg);
+  }
+  50% {
+    transform: translate3d(18px, 14px, 0) rotate(9deg);
+  }
+}
+
+@keyframes spaceSceneFloat {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(-8px, -14px, 0) scale(1.06);
+  }
+}
+
+@keyframes spaceSceneShimmer {
+  0%, 100% {
+    opacity: var(--scene-opacity, 0.8);
+    transform: translate3d(0, 0, 0) skewX(0deg);
+  }
+  45% {
+    opacity: 1;
+    transform: translate3d(10px, -5px, 0) skewX(-5deg);
+  }
+}
+
+@keyframes spaceSceneEmber {
+  0%, 100% {
+    opacity: var(--scene-opacity, 0.82);
+    transform: translate3d(0, 8px, 0) scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: translate3d(5px, -16px, 0) scale(1.08);
+  }
+}
+
+@keyframes spaceSceneBob {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) rotate(-2deg);
+  }
+  50% {
+    transform: translate3d(0, -12px, 0) rotate(3deg);
+  }
+}
+
+@keyframes spaceSceneDrift {
+  0%, 100% {
+    transform: translate3d(-6px, 2px, 0) rotate(-5deg);
+  }
+  50% {
+    transform: translate3d(10px, -8px, 0) rotate(6deg);
+  }
+}
+
+.space-scene-motion {
+  transform-origin: center;
+  will-change: transform, opacity, filter;
+}
+
+.space-scene-twinkle {
+  animation: spaceSceneTwinkle 7s ease-in-out infinite;
+}
+
+.space-scene-sway {
+  animation: spaceSceneSway 9s ease-in-out infinite;
+}
+
+.space-scene-fall {
+  animation: spaceSceneFall 10s ease-in-out infinite;
+}
+
+.space-scene-float {
+  animation: spaceSceneFloat 8s ease-in-out infinite;
+}
+
+.space-scene-shimmer {
+  animation: spaceSceneShimmer 6.5s ease-in-out infinite;
+}
+
+.space-scene-ember {
+  animation: spaceSceneEmber 5.5s ease-in-out infinite;
+}
+
+.space-scene-bob {
+  animation: spaceSceneBob 7.5s ease-in-out infinite;
+}
+
+.space-scene-drift {
+  animation: spaceSceneDrift 11s ease-in-out infinite;
+}
+
+@keyframes spaceEntranceLayerFade {
+  0%, 78% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes spaceEntranceCoreBloom {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.12);
+    filter: blur(10px) brightness(1.25);
+  }
+  28% {
+    opacity: 0.96;
+    transform: translate(-50%, -50%) scale(1.08);
+    filter: blur(4px) brightness(1.35);
+  }
+  58% {
+    opacity: 0.32;
+    transform: translate(-50%, -50%) scale(1.7);
+    filter: blur(16px) brightness(1.05);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(2.1);
+    filter: blur(26px) brightness(0.9);
+  }
+}
+
+@keyframes spaceEntranceWave {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.18);
+  }
+  24% {
+    opacity: 0.72;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(2.5);
+  }
+}
+
+@keyframes spaceEntranceBurst {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) translate3d(0, 0, 0) scale(0.12) rotate(var(--particle-rotate));
+  }
+  12% {
+    opacity: var(--particle-opacity);
+    transform: translate(-50%, -50%) translate3d(0, 0, 0) scale(0.42) rotate(var(--particle-rotate));
+  }
+  72% {
+    opacity: var(--particle-opacity);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) translate3d(var(--burst-x), var(--burst-y), 0) scale(var(--particle-scale)) rotate(var(--particle-end-rotate));
+  }
+}
+
+@keyframes spaceEntranceParticleFlicker {
+  0%, 100% {
+    transform: scale(1);
+  }
+  46% {
+    transform: scale(1.18);
+  }
+}
+
+@keyframes spaceMemoryEntranceReveal {
+  0%, 32% {
+    opacity: 0;
+    transform: scale(0.96);
+    filter: blur(12px) saturate(1.18);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0) saturate(1);
+  }
+}
+
+.space-entrance {
+  --entrance-left: var(--entrance-desktop-left);
+  --entrance-top: var(--entrance-desktop-top);
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+  overflow: hidden;
+  animation: spaceEntranceLayerFade 3600ms ease-out forwards;
+  mix-blend-mode: screen;
+}
+
+.space-entrance-core {
+  position: absolute;
+  left: var(--entrance-left);
+  top: var(--entrance-top);
+  width: var(--entrance-core-width);
+  height: var(--entrance-core-height);
+  border-radius: 999px;
+  background: var(--entrance-core-background);
+  box-shadow: 0 0 80px var(--entrance-glow-color), 0 0 160px var(--entrance-glow-color);
+  animation: spaceEntranceCoreBloom 1700ms ease-out forwards;
+}
+
+.space-entrance-wave {
+  position: absolute;
+  left: var(--entrance-left);
+  top: var(--entrance-top);
+  width: min(58vmin, 680px);
+  height: min(58vmin, 680px);
+  border: 1px solid var(--entrance-ring-color);
+  border-radius: 999px;
+  box-shadow: inset 0 0 30px var(--entrance-glow-color), 0 0 52px var(--entrance-glow-color);
+  animation: spaceEntranceWave 1900ms ease-out 120ms forwards;
+}
+
+.space-entrance-particle {
+  --burst-x: var(--desktop-x);
+  --burst-y: var(--desktop-y);
+  position: absolute;
+  left: var(--entrance-left);
+  top: var(--entrance-top);
+  width: var(--particle-size);
+  height: var(--particle-size);
+  opacity: 0;
+  transform-origin: center;
+  will-change: transform, opacity;
+  animation: spaceEntranceBurst var(--particle-duration) cubic-bezier(0.14, 0.82, 0.2, 1) var(--particle-delay) forwards;
+}
+
+.space-entrance-particle-shape {
+  display: block;
+  width: 100%;
+  height: 100%;
+  animation: spaceEntranceParticleFlicker 720ms ease-in-out infinite;
+}
+
+.space-memory-entrance-reveal {
+  opacity: 0;
+  transform-origin: center;
+  will-change: opacity, transform, filter;
+  animation: spaceMemoryEntranceReveal 1600ms cubic-bezier(0.16, 0.84, 0.22, 1) forwards;
+}
+
+.space-entrance-effect-campfire .space-entrance-core {
+  border-radius: 52% 48% 46% 54%;
+  transform-origin: 50% 78%;
+}
+
+.space-entrance-effect-campfire .space-entrance-wave {
+  width: min(42vmin, 520px);
+  height: min(28vmin, 340px);
+}
+
+.space-entrance-effect-wave .space-entrance-wave {
+  border-radius: 42% 58% 46% 54%;
+}
+
+.space-entrance-effect-film .space-entrance-core {
+  border-radius: 36px;
+}
+
+.space-entrance-effect-party .space-entrance-particle,
+.space-entrance-effect-petal .space-entrance-particle,
+.space-entrance-effect-leaf .space-entrance-particle {
+  mix-blend-mode: normal;
+}
+
+@media (max-width: 767px) {
+  .space-entrance {
+    --entrance-left: var(--entrance-mobile-left);
+    --entrance-top: var(--entrance-mobile-top);
+  }
+
+  .space-entrance-particle {
+    --burst-x: var(--mobile-x);
+    --burst-y: var(--mobile-y);
+  }
+
+  .space-entrance-wave {
+    width: min(76vmin, 430px);
+    height: min(76vmin, 430px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .space-entrance {
+    display: none;
+  }
+
+  .space-memory-entrance-reveal {
+    opacity: 1;
+    transform: none;
+    filter: none;
+    animation: none;
+  }
+}
