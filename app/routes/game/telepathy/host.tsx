@@ -180,7 +180,7 @@ export default function GameHostPage() {
     return () => window.clearInterval(interval);
   }, [revalidator]);
 
-  const playUrl = `${origin}/game/play`;
+  const playUrl = `${origin}/game/telepathy/play`;
   const isSubmitting = fetcher.state !== "idle";
 
   let gridClass = "grid w-full max-w-7xl gap-8 px-4 ";

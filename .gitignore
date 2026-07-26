@@ -11,3 +11,6 @@
 secure.key
 /generated/prisma
 package-lock.json
+# AI 작업실은 로컬 전용 문서 (ADR_로컬_AI작업실_관리.md 정책)
+/docs/AI_작업실/
+CLAUDE.md

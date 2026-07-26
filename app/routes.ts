@@ -102,8 +102,12 @@ export default [
     ]),
   ]),
   ...prefix("game", [
-    route("play", "routes/game/play.tsx"),
-    route("host", "routes/game/host.tsx"),
+    index("routes/game/index.tsx"),
+    route("telepathy/host", "routes/game/telepathy/host.tsx"),
+    route("telepathy/play", "routes/game/telepathy/play.tsx"),
+    route("codename/host", "routes/game/codename/host.tsx"),
+    route("codename/play", "routes/game/codename/play.tsx"),
+    route("codename/key", "routes/game/codename/key.tsx"),
   ]),
 
   route("api/categories", "routes/api/categories.ts"),
