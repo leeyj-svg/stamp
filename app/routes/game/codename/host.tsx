@@ -1,9 +1,9 @@
 import { type ActionFunctionArgs, type LoaderFunctionArgs, Link, useFetcher, useLoaderData } from "react-router";
 import { useEffect, useState } from "react";
-import { QRCodeSVG } from "qrcode.react";
 import * as z from "zod";
-import { Eye, Minus, Play, Plus, Shuffle } from "lucide-react";
+import { Eye, LayoutGrid, Minus, Play, Plus, Shuffle } from "lucide-react";
 import { Button } from "~/components/ui/button";
+import { ClickableQr } from "~/components/game/clickable-qr";
 import { db } from "~/lib/db.server";
 import {
   CODENAME_SESSION_ID,
@@ -13,6 +13,7 @@ import {
   parseCodenameState,
   toCodenameJson,
 } from "~/lib/codename-session";
+import { DIFFICULTY_LABEL, DIFFICULTY_OPTIONS, type DifficultyFilter } from "~/lib/game-difficulty";
 
 export const loader = async (_args: LoaderFunctionArgs) => {
   let session = await db.gameSession.findUnique({
@@ -37,6 +38,7 @@ export const loader = async (_args: LoaderFunctionArgs) => {
     teamCount: state.teamCount,
     cardsPerTeam: state.cardsPerTeam,
     neutralCount: state.neutralCount,
+    difficulty: state.difficulty,
     status: state.status,
   };
 };
@@ -46,6 +48,7 @@ const actionSchema = z.object({
   teamCount: z.coerce.number(),
   cardsPerTeam: z.coerce.number(),
   neutralCount: z.coerce.number(),
+  difficulty: z.enum(["all", "easy", "normal", "hard"]),
 });
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -117,6 +120,7 @@ export default function CodenameHostPage() {
   const [teamCount, setTeamCount] = useState(loaded.teamCount);
   const [cardsPerTeam, setCardsPerTeam] = useState(loaded.cardsPerTeam);
   const [neutralCount, setNeutralCount] = useState(loaded.neutralCount);
+  const [difficulty, setDifficulty] = useState<DifficultyFilter>(loaded.difficulty);
 
   useEffect(() => {
     setOrigin(window.location.origin);
@@ -142,14 +146,41 @@ export default function CodenameHostPage() {
   const isSubmitting = fetcher.state !== "idle";
 
   return (
-    <div className="flex min-h-screen flex-col items-center bg-slate-900 p-4 pb-16 text-white">
-      <h1 className="mt-10 mb-2 text-3xl font-bold uppercase tracking-widest text-slate-300">코드네임</h1>
+    <div className="relative flex min-h-screen flex-col items-center bg-slate-900 p-4 pb-16 text-white">
+      <Link
+        to="/game"
+        className="absolute left-4 top-4 z-10 flex items-center gap-1.5 rounded-full border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700"
+      >
+        <LayoutGrid className="h-4 w-4" /> 게임 목록
+      </Link>
+
+      <h1 className="mt-16 mb-2 text-3xl font-bold uppercase tracking-widest text-slate-300 md:mt-10">코드네임</h1>
       <p className="mb-8 text-sm text-slate-500">설정을 정하고 새 게임을 시작하세요.</p>
 
       <div className="flex w-full max-w-lg flex-col gap-4">
         <Stepper label="팀 수" value={teamCount} min={LIMITS.team.min} max={LIMITS.team.max} onChange={handleTeamChange} />
         <Stepper label="팀당 카드" value={cardsPerTeam} min={LIMITS.cards.min} max={LIMITS.cards.max} onChange={setCardsPerTeam} />
         <Stepper label="중립 카드" value={neutralCount} min={LIMITS.neutral.min} max={LIMITS.neutral.max} onChange={setNeutralCount} />
+
+        <div className="rounded-xl border border-slate-700 bg-slate-800 p-4">
+          <p className="mb-3 font-bold text-slate-200">난이도</p>
+          <div className="grid grid-cols-4 gap-2">
+            {DIFFICULTY_OPTIONS.map((option) => (
+              <Button
+                key={option}
+                type="button"
+                onClick={() => setDifficulty(option)}
+                className={
+                  difficulty === option
+                    ? "bg-yellow-400 font-bold text-black"
+                    : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                }
+              >
+                {DIFFICULTY_LABEL[option]}
+              </Button>
+            ))}
+          </div>
+        </div>
 
         <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-4 text-center text-slate-300">
           총 카드 <span className="text-xl font-extrabold text-white">{total}</span>칸
@@ -164,6 +195,7 @@ export default function CodenameHostPage() {
                 teamCount: String(teamCount),
                 cardsPerTeam: String(cardsPerTeam),
                 neutralCount: String(neutralCount),
+                difficulty,
               },
               { method: "post" },
             )
@@ -190,15 +222,9 @@ export default function CodenameHostPage() {
         </div>
 
         {origin && (
-          <div className="mt-4 flex justify-around gap-4">
-            <div className="flex flex-col items-center rounded-lg bg-white p-3">
-              <QRCodeSVG value={playUrl} size={110} level="H" />
-              <span className="mt-2 text-xs font-bold text-black">게임판 접속</span>
-            </div>
-            <div className="flex flex-col items-center rounded-lg bg-white p-3">
-              <QRCodeSVG value={keyUrl} size={110} level="H" />
-              <span className="mt-2 text-xs font-bold text-black">정답판(스파이마스터)</span>
-            </div>
+          <div className="mt-4 flex flex-wrap justify-center gap-4">
+            <ClickableQr value={playUrl} label="게임판 접속" size={150} />
+            <ClickableQr value={keyUrl} label="정답판(스파이마스터)" size={150} />
           </div>
         )}
       </div>

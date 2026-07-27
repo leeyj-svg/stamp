@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import * as z from "zod";
 import { sampleWords } from "./codename-words";
+import type { DifficultyFilter } from "./game-difficulty";
 
 // 코드네임 상태/규칙 (서버·클라 공용, 순수 함수)
 // DB: GameSession id=2 의 gameState JSON 에 CodenameState 를 저장한다.
@@ -32,6 +33,7 @@ const stateSchema = z.object({
   teamCount: z.number(),
   cardsPerTeam: z.number(),
   neutralCount: z.number(),
+  difficulty: z.enum(["all", "easy", "normal", "hard"]).default("all"),
   cards: z.array(cardSchema),
   currentTeam: z.enum(["red", "blue", "green", "yellow", "purple"]),
   status: z.enum(["playing", "won", "over"]),
@@ -45,6 +47,7 @@ export type CodenameConfig = {
   teamCount: number;
   cardsPerTeam: number;
   neutralCount: number;
+  difficulty?: DifficultyFilter;
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -69,6 +72,7 @@ export function createCodenameGame(config: CodenameConfig): CodenameState {
   const teamCount = clamp(config.teamCount, LIMITS.team.min, LIMITS.team.max);
   const cardsPerTeam = clamp(config.cardsPerTeam, LIMITS.cards.min, LIMITS.cards.max);
   const neutralCount = clamp(config.neutralCount, LIMITS.neutral.min, LIMITS.neutral.max);
+  const difficulty = config.difficulty ?? "all";
 
   const teams = teamColorsFor(teamCount);
 
@@ -80,7 +84,7 @@ export function createCodenameGame(config: CodenameConfig): CodenameState {
   colors.push("black");
 
   const shuffledColors = shuffle(colors);
-  const words = sampleWords(shuffledColors.length);
+  const words = sampleWords(shuffledColors.length, difficulty);
 
   const cards: CodenameCard[] = shuffledColors.map((color, index) => ({
     position: index,
@@ -95,6 +99,7 @@ export function createCodenameGame(config: CodenameConfig): CodenameState {
     teamCount,
     cardsPerTeam,
     neutralCount,
+    difficulty,
     cards,
     currentTeam,
     status: "playing",

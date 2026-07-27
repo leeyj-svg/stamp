@@ -1,8 +1,8 @@
-﻿import { type ActionFunctionArgs, type LoaderFunctionArgs, useFetcher, useLoaderData, useRevalidator } from "react-router";
+﻿import { type ActionFunctionArgs, type LoaderFunctionArgs, Link, useFetcher, useLoaderData, useRevalidator } from "react-router";
 import { useEffect, useState } from "react";
-import { QRCodeSVG } from "qrcode.react";
 import * as z from "zod";
 import { Button } from "~/components/ui/button";
+import { ClickableQr } from "~/components/game/clickable-qr";
 import { db } from "~/lib/db.server";
 import {
   createGameTeam,
@@ -10,7 +10,7 @@ import {
   parseGameState,
   toGameStateJson,
 } from "~/lib/game-session";
-import { CheckCircle2, Eye, HelpCircle, Minus, Plus, RotateCcw } from "lucide-react";
+import { CheckCircle2, Eye, HelpCircle, LayoutGrid, Minus, Plus, RotateCcw } from "lucide-react";
 
 const GAME_SESSION_ID = 1;
 const POLLING_INTERVAL = 5000;
@@ -194,12 +194,18 @@ export default function GameHostPage() {
 
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-start bg-slate-900 p-4 pb-40 text-white">
-      <div className="absolute right-4 top-4 z-10 flex flex-col items-center rounded-lg bg-white p-2 shadow-lg">
-        {origin && <QRCodeSVG value={playUrl} size={100} level="H" />}
-        <span className="mt-1 text-xs font-bold text-black">참가자 접속</span>
+      <Link
+        to="/game"
+        className="absolute left-4 top-4 z-10 flex items-center gap-1.5 rounded-full border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700"
+      >
+        <LayoutGrid className="h-4 w-4" /> 게임 목록
+      </Link>
+
+      <div className="absolute right-4 top-4 z-10">
+        {origin && <ClickableQr value={playUrl} label="참가자 접속" size={140} />}
       </div>
 
-      <h1 className="mt-10 mb-8 text-3xl font-bold uppercase tracking-widest text-slate-400">텔레파시 팀 배틀</h1>
+      <h1 className="mt-16 mb-8 text-3xl font-bold uppercase tracking-widest text-slate-400 md:mt-10">텔레파시 팀 배틀</h1>
 
       <div
         className={[

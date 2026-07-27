@@ -14,10 +14,12 @@ export type GameEntry = {
   hostPath?: string;
   /** 참가자/플레이 화면 경로 */
   playPath: string;
-  /** GameSession 고정 id (게임별 유일) */
-  sessionId: number;
+  /** GameSession 고정 id (GameSession 을 쓰는 게임만. 전용 테이블 게임은 생략) */
+  sessionId?: number;
   /** 허브 노출 여부 (준비 중 게임은 false) */
   enabled: boolean;
+  /** "game"=게임 카드 그리드, "tool"=상단 별도 버튼(점수판 등). 기본 game */
+  kind?: "game" | "tool";
 };
 
 export const GAMES: GameEntry[] = [
@@ -38,6 +40,31 @@ export const GAMES: GameEntry[] = [
     playPath: "/game/codename/play",
     sessionId: 2,
     enabled: true,
+  },
+  {
+    slug: "liar",
+    title: "라이어 게임",
+    description: "제시어를 모르는 라이어를 찾아라. 폰마다 카드 배정 + 투표. (3명 이상)",
+    hostPath: "/game/liar/host",
+    playPath: "/game/liar/play",
+    sessionId: 3,
+    enabled: true,
+  },
+  {
+    slug: "word",
+    title: "단어게임",
+    description: "단계별 단어 공개 + Go/Stop/Fail. 더 갈지 멈출지 고르는 리스크 게임.",
+    hostPath: "/game/word/host",
+    playPath: "/game/word/play",
+    enabled: true,
+  },
+  {
+    slug: "scoreboard",
+    title: "팀 점수판",
+    description: "여러 게임에 공용으로 쓰는 팀 점수판. 자리 배치·사회자 대결·효과음 지원. (전용 Scoreboard 테이블)",
+    playPath: "/game/scoreboard",
+    enabled: true,
+    kind: "tool",
   },
 ];
 

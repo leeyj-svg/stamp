@@ -707,6 +707,54 @@ model GameSession {
   gameState  Json // 모든 팀의 상태와 제출 글자를 유연하게 담습니다.
 }
 
+// --- 단어게임 (단계별 단어 공개 + Go/Stop/Fail) ---
+
+model WordGameTopic {
+  id        Int      @id @default(autoincrement())
+  title     String // 주제
+  stages    Json // string[][] 길이 5, 각 단계 후보 단어 배열
+  createdAt DateTime @default(now())
+}
+
+model WordGameSession {
+  id        Int  @id @default(autoincrement())
+  gameState Json // 라운드/점수 상태
+}
+
+// --- 팀 점수판 (여러 게임 공용 점수 도구) ---
+
+model Scoreboard {
+  id         Int     @id @default(autoincrement())
+  mode       String  @default("teams") // "teams" | "hostVsTeams"
+  amount1    Int     @default(50) // 카드 가감 버튼 값 1
+  amount2    Int     @default(100) // 카드 가감 버튼 값 2
+  teamBonus  Int     @default(0) // 팀 공통 추가점수 (팀합산 = 개별 합 + teamBonus)
+  theme      String  @default("slate") // 배경 테마 키
+  cardColor  String  @default("") // 카드색 직접 지정(hex). 빈 값이면 배경에서 자동 파생
+  soundOn    Boolean @default(true)
+  hostName   String  @default("사회자")
+  hostScore  Int     @default(0)
+  hostHidden Boolean @default(true) // 큰 화면에서 사회자 점수 숨김
+
+  teams ScoreTeam[]
+}
+
+model ScoreTeam {
+  id      Int   @id @default(autoincrement())
+  name    String
+  score   Int   @default(0)
+  x       Float @default(10) // 배치 x (보드 폭 대비 %)
+  y       Float @default(10) // 배치 y (보드 높이 대비 %)
+  w       Int   @default(320) // 카드 폭(px)
+  h       Int   @default(200) // 카드 높이(px)
+  order   Int   @default(0) // 리스트/폰 표시 순서
+
+  boardId Int
+  board   Scoreboard @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@index([boardId])
+}
+
 // --- 생일 롤링페이퍼 & 앨범(Memory) 관련 모델 ---
 
 model MemorySpace {
