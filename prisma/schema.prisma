@@ -82,6 +82,11 @@ enum SpaceSurface {
   ALBUM
 }
 
+enum MeetGranularity {
+  DATE
+  DATE_TIME
+}
+
 model User {
   id          String     @id @default(cuid())
   name        String
@@ -883,4 +888,34 @@ model CommunityPostLike {
 
   @@id([postId, userId])
   @@index([userId])
+}
+
+// --- 지인 시간 맞추기(when2meet 스타일) 모델 ---
+
+model MeetEvent {
+  id             String          @id @default(uuid())
+  title          String
+  granularity    MeetGranularity @default(DATE)
+  candidateDates Json // string[] "YYYY-MM-DD" (KST 벽시계, 범위를 명시 날짜배열로 펼쳐 저장)
+  slotMinutes    Int? // 10 | 30 | 60, DATE면 null
+  startMinute    Int? // 하루 시작(분, 예 540=09:00)
+  endMinute      Int? // 하루 끝(분, 예 1320=22:00)
+  createdAt      DateTime        @default(now())
+
+  responses MeetResponse[]
+}
+
+model MeetResponse {
+  id           String    @id @default(uuid())
+  eventId      String
+  event        MeetEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name         String
+  password     String // 평문 (MemorySpace.password와 동일 정책)
+  availability Json // string[] 슬롯키
+  writerId     String? // 로그인 사용자면 user.id, 아니면 null (정보용)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // 이름 유니크 없음 — 동명이인 허용. 본인 식별은 localStorage responseId + (name,password) 매칭
+  @@index([eventId])
 }

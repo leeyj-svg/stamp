@@ -120,6 +120,13 @@ export default [
     route("word/stream", "routes/game/word/stream.ts"),
   ]),
 
+  ...prefix("meet", [
+    index("routes/meet/index.tsx"),
+    ...prefix(":id", [
+      index("routes/meet/$id/index.tsx"),
+    ]),
+  ]),
+
   route("api/categories", "routes/api/categories.ts"),
   route("api/users/search", "routes/api/users/search.ts"),
   route("api/users/check", "routes/api/users/check.ts"),
