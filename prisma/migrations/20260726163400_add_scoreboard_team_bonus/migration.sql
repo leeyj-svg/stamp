@@ -1,2 +1,2 @@
 -- AlterTable
-ALTER TABLE `scoreboard` ADD COLUMN `teamBonus` INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE `Scoreboard` ADD COLUMN `teamBonus` INTEGER NOT NULL DEFAULT 0;

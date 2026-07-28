@@ -1,4 +1,4 @@
 -- AlterTable
-ALTER TABLE `scoreboard` DROP COLUMN `step`,
+ALTER TABLE `Scoreboard` DROP COLUMN `step`,
     ADD COLUMN `amount1` INTEGER NOT NULL DEFAULT 50,
     ADD COLUMN `amount2` INTEGER NOT NULL DEFAULT 100;
