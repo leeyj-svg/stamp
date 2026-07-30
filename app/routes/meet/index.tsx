@@ -1,9 +1,7 @@
 import { type ActionFunctionArgs, Form, redirect, useActionData, useNavigation } from "react-router";
 import { useMemo, useState } from "react";
-import { ko } from "date-fns/locale";
-import type { DateRange } from "react-day-picker";
 import { CalendarDays, Clock, Sparkles } from "lucide-react";
-import { Calendar } from "~/components/ui/calendar";
+import { MonthPicker } from "~/components/meet/month-picker";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { createEventSchema, createMeetEvent } from "~/lib/meet.server";
@@ -42,21 +40,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return redirect(`/meet/${id}`);
 };
 
-function dateToKey(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function eachDayKey(from: Date, to: Date): string[] {
-  const out: string[] = [];
-  const cur = new Date(from.getFullYear(), from.getMonth(), from.getDate());
-  const end = new Date(to.getFullYear(), to.getMonth(), to.getDate());
-  while (cur <= end) {
-    out.push(dateToKey(cur));
-    cur.setDate(cur.getDate() + 1);
-  }
-  return out;
-}
-
 const HOURS = Array.from({ length: 25 }, (_, i) => i); // 0..24
 
 export default function MeetCreatePage() {
@@ -66,20 +49,12 @@ export default function MeetCreatePage() {
 
   const [granularity, setGranularity] = useState<"DATE" | "DATE_TIME">("DATE");
   const [pickMode, setPickMode] = useState<"range" | "multiple">("range");
-  const [range, setRange] = useState<DateRange | undefined>();
-  const [days, setDays] = useState<Date[]>([]);
+  const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set());
   const [slotMinutes, setSlotMinutes] = useState<number>(30);
   const [startHour, setStartHour] = useState<number>(DEFAULT_START_MINUTE / 60);
   const [endHour, setEndHour] = useState<number>(DEFAULT_END_MINUTE / 60);
 
-  const candidateDates = useMemo(() => {
-    if (pickMode === "range") {
-      if (range?.from && range?.to) return eachDayKey(range.from, range.to);
-      if (range?.from) return [dateToKey(range.from)];
-      return [];
-    }
-    return days.map(dateToKey).sort();
-  }, [pickMode, range, days]);
+  const candidateDates = useMemo(() => [...selectedDates].sort(), [selectedDates]);
 
   const startMinute = startHour * 60;
   const endMinute = endHour * 60;
@@ -135,17 +110,12 @@ export default function MeetCreatePage() {
             <div className="mb-1.5 flex items-center justify-between">
               <label className="text-sm font-semibold">후보 날짜</label>
               <div className="flex gap-1 text-xs">
-                <button type="button" onClick={() => setPickMode("range")} className={`rounded-full px-2.5 py-1 font-semibold ${pickMode === "range" ? "bg-indigo-500 text-white" : "bg-slate-200 text-slate-600"}`}>범위</button>
-                <button type="button" onClick={() => setPickMode("multiple")} className={`rounded-full px-2.5 py-1 font-semibold ${pickMode === "multiple" ? "bg-indigo-500 text-white" : "bg-slate-200 text-slate-600"}`}>개별</button>
+                <button type="button" onClick={() => { setPickMode("range"); setSelectedDates(new Set()); }} className={`rounded-full px-2.5 py-1 font-semibold ${pickMode === "range" ? "bg-indigo-500 text-white" : "bg-slate-200 text-slate-600"}`}>범위</button>
+                <button type="button" onClick={() => { setPickMode("multiple"); setSelectedDates(new Set()); }} className={`rounded-full px-2.5 py-1 font-semibold ${pickMode === "multiple" ? "bg-indigo-500 text-white" : "bg-slate-200 text-slate-600"}`}>개별</button>
               </div>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-2">
-              {pickMode === "range" ? (
-                <Calendar mode="range" locale={ko} numberOfMonths={1} selected={range} onSelect={setRange} disabled={{ before: new Date() }} className="mx-auto" />
-              ) : (
-                <Calendar mode="multiple" locale={ko} numberOfMonths={1} selected={days} onSelect={(d) => setDays(d ?? [])} disabled={{ before: new Date() }} className="mx-auto" />
-              )}
-            </div>
+            <p className="mb-1.5 text-xs text-slate-500">{pickMode === "range" ? "시작일과 종료일을 순서대로 누르세요." : "원하는 날짜를 눌러 선택하세요."}</p>
+            <MonthPicker mode={pickMode} selected={selectedDates} onChange={setSelectedDates} />
             <p className="mt-1.5 text-xs text-slate-500">{candidateDates.length}일 선택됨</p>
           </div>
 

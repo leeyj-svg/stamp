@@ -5,16 +5,14 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import { TimeGrid } from "~/components/meet/time-grid";
+import { DateBoard } from "~/components/meet/date-board";
 import { getMeetEventWithResponses, respondSchema, upsertMeetResponse } from "~/lib/meet.server";
 import { getPublicOrigin, getSpaceShareMeta } from "~/lib/space-meta";
 import { formatKoreanDate } from "~/lib/space-date";
 import {
-  intensity,
-  makeSlotKey,
   mergeContiguous,
   minuteToLabel,
   parseSlotKey,
-  rampColor,
   rankSlots,
   respondentCount,
   tallyMap,
@@ -61,63 +59,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (!res) throw new Response("Not Found", { status: 404 });
   return { ok: true as const, responseId: res.responseId };
 };
-
-// ---- DATE 모드 결과 히트맵 (월별 달력 그리드) ----
-function DateHeatmap({ candidateDates, map, maxCount, onPick, selectedKey }: { candidateDates: string[]; map: Map<string, { count: number; names: string[] }>; maxCount: number; onPick?: (key: string) => void; selectedKey?: string | null }) {
-  const months = useMemo(() => {
-    const set = new Set(candidateDates.map((d) => d.slice(0, 7)));
-    return [...set].sort();
-  }, [candidateDates]);
-  const candidateSet = useMemo(() => new Set(candidateDates), [candidateDates]);
-
-  return (
-    <div className="space-y-4">
-      {months.map((ym) => {
-        const [y, m] = ym.split("-").map(Number);
-        const first = new Date(y, m - 1, 1);
-        const startWeekday = first.getDay();
-        const daysInMonth = new Date(y, m, 0).getDate();
-        const cells: (number | null)[] = [];
-        for (let i = 0; i < startWeekday; i++) cells.push(null);
-        for (let d = 1; d <= daysInMonth; d++) cells.push(d);
-        return (
-          <div key={ym} className="rounded-xl border border-slate-200 bg-white p-3">
-            <p className="mb-2 text-center text-sm font-semibold text-slate-700">{y}년 {m}월</p>
-            <div className="grid grid-cols-7 gap-1 text-center text-[10px] text-slate-400">
-              {["일", "월", "화", "수", "목", "금", "토"].map((w) => <div key={w}>{w}</div>)}
-            </div>
-            <div className="mt-1 grid grid-cols-7 gap-1">
-              {cells.map((d, i) => {
-                if (d == null) return <div key={i} />;
-                const key = `${ym}-${String(d).padStart(2, "0")}`;
-                const isCandidate = candidateSet.has(key);
-                const t = map.get(key);
-                const count = t?.count ?? 0;
-                const picked = selectedKey === key;
-                if (!isCandidate) {
-                  return <div key={i} className="flex aspect-square items-center justify-center rounded-md text-xs text-slate-300">{d}</div>;
-                }
-                return (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => onPick?.(key)}
-                    className={`flex aspect-square flex-col items-center justify-center rounded-md border text-xs hover:border-indigo-400 ${picked ? "border-2 border-indigo-600" : "border-slate-200"}`}
-                    style={{ backgroundColor: rampColor(intensity(count, maxCount)) }}
-                    title={`${key} · ${count}명${count ? ": " + t!.names.join(", ") : ""}`}
-                  >
-                    <span className={count > 0 && intensity(count, maxCount) > 0.5 ? "font-semibold text-white" : ""}>{d}</span>
-                    {count > 0 && <span className={`text-[9px] ${intensity(count, maxCount) > 0.5 ? "text-white" : "text-slate-500"}`}>{count}</span>}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 export default function MeetEventPage() {
   const { event, responses } = useLoaderData<typeof loader>();
@@ -247,26 +188,14 @@ export default function MeetEventPage() {
                   <TimeGrid mode="input" event={event} selected={selected} onChange={setSelected} />
                 </div>
               ) : (
-                <div className="flex flex-wrap gap-2">
-                  {event.candidateDates.map((d) => {
-                    const on = selected.has(makeSlotKey(d));
-                    return (
-                      <button
-                        key={d}
-                        type="button"
-                        onClick={() => {
-                          const next = new Set(selected);
-                          const k = makeSlotKey(d);
-                          if (next.has(k)) next.delete(k);
-                          else next.add(k);
-                          setSelected(next);
-                        }}
-                        className={`rounded-lg border px-3 py-2 text-sm font-semibold ${on ? "border-indigo-500 bg-indigo-500 text-white" : "border-slate-200 bg-white text-slate-600"}`}
-                      >
-                        {formatKoreanDate(d)}
-                      </button>
-                    );
-                  })}
+                <div>
+                  <p className="pb-2 text-xs text-slate-500">되는 날짜를 눌러 선택하세요.</p>
+                  <DateBoard
+                    mode="input"
+                    candidateDates={event.candidateDates}
+                    selected={selected}
+                    onToggle={(k) => setSelected((prev) => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; })}
+                  />
                 </div>
               )}
 
@@ -334,7 +263,7 @@ export default function MeetEventPage() {
                       <TimeGrid mode="result" event={event} tallyMap={map} maxCount={maxCount} onPick={(k) => setPickedKey((p) => (p === k ? null : k))} selectedKey={pickedKey} />
                     </div>
                   ) : (
-                    <DateHeatmap candidateDates={event.candidateDates} map={map} maxCount={maxCount} onPick={(k) => setPickedKey((p) => (p === k ? null : k))} selectedKey={pickedKey} />
+                    <DateBoard mode="result" candidateDates={event.candidateDates} tallyMap={map} maxCount={maxCount} onPick={(k: string) => setPickedKey((p) => (p === k ? null : k))} selectedKey={pickedKey} />
                   )}
                   {pickedKey && (() => {
                     const t = map.get(pickedKey);
